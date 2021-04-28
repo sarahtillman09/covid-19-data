@@ -23,202 +23,260 @@ library(bayestestR)
 # Cases & Deaths Data
 ```{r load data, message=FALSE}
 mask_use <- read_csv(file="../mask-use/mask-use-by-county.csv")
-cases_total <- read_csv(file="../us-states.csv")
-cases_recent <- read_csv(file="../us-counties-recent.csv")
+cases_recent <- read_csv(file="../us-states.csv")
 prison_facilities <- read_csv(file="../prisons/facilities.csv")
 systems <- read.csv(file="../prisons/systems.csv")
 ```
-# Prison Facilities Data
-```{r setting up data w cateogorical variables}
-prison_facilities <- prison_facilities %>%
-  filter(facility_type != "Reservation jail" & facility_type != "U.S. Marshalls")
-
-facility_group <- rep(0, nrow(prison_facilities))
-prison_facilities["facility_group"] <- facility_group
-prison <- rep(0, nrow(prison_facilities))
-prison_facilities["prison"] <- prison
-
-prison_facilities <- prison_facilities %>%
-  mutate (facility_group = case_when(
-  facility_type == "Federal halfway house"~ 2,
-  facility_type == "Federal prison"~ 2,
-  facility_type == "State facility"~ 1,
-  facility_type == "State halfway house"~ 1,
-  facility_type == "State juvenile detention"~ 1,
-  facility_type == "State prison"~ 1,
-  facility_type == "State rehabilitation center"~ 1,
-  facility_type == "State work camp"~ 1,
-  TRUE ~ 0)) %>%
-  mutate(prison = case_when(
-    facility_type == "State prison"~ 1,
-    facility_type == "Federal prison"~ 1,
-    TRUE ~ 0))
-
-# add mask use data for surrounding area
-colnames(prison_facilities)[6] <- "fips"
-colnames(mask_use)[1] <- "fips"
-prison_facilities <- inner_join(prison_facilities, mask_use, by = "fips")
-
-# add mortality column
-prison_facilities["mortality"] <- prison_facilities$total_inmate_deaths / prison_facilities$total_inmate_cases
-
-# drop unimportant columns
-facilities <- prison_facilities %>%
-  select(-c(nyt_id, facility_lng, facility_lat, max_inmate_population_2020, note,
-            facility_name, facility_type, fips))
-
-# drop NA's
-facilities <- drop_na(facilities)
-
-# convert categorical variables to factors & scale numerical values
-facilities$prison <- factor(facilities$prison)
-facilities$facility_group <- factor(facilities$facility_group)
-facilities$latest_inmate_population <- scale(facilities$latest_inmate_population)
-facilities$total_inmate_cases <- scale(facilities$total_inmate_cases)
-facilities$total_officer_cases <- scale(facilities$total_officer_cases)
-facilities$total_inmate_deaths <- scale(facilities$total_inmate_deaths)
-facilities$NEVER <- scale(facilities$NEVER)
-facilities$RARELY <- scale(facilities$RARELY)
-facilities$SOMETIMES <- scale(facilities$SOMETIMES)
-facilities$FREQUENTLY <- scale(facilities$FREQUENTLY)
-facilities$ALWAYS <- scale(facilities$ALWAYS)
-facilities$total_officer_deaths <- scale(facilities$total_officer_deaths)
-facilities$mortality <- scale(facilities$mortality)
-```
-# EDA on Prison Facilities 
+# State Totals at End of March
 ```{r}
-p1 <- facilities %>%
-  ggplot(aes(x=mortality)) + geom_density()
-p1
+state.cases <- cases_recent %>%
+  filter(date == "2021-03-31") %>%
+  select(-c("date", "fips"))
 ```
-
-```{r}
-new.facilities <- facilities %>%
-  filter(mortality < 3)
-# rescale variables
-new.facilities$latest_inmate_population <- scale(new.facilities$latest_inmate_population)
-new.facilities$total_inmate_cases <- scale(new.facilities$total_inmate_cases)
-new.facilities$total_officer_cases <- scale(new.facilities$total_officer_cases)
-new.facilities$total_inmate_deaths <- scale(new.facilities$total_inmate_deaths)
-new.facilities$NEVER <- scale(new.facilities$NEVER)
-new.facilities$RARELY <- scale(new.facilities$RARELY)
-new.facilities$SOMETIMES <- scale(new.facilities$SOMETIMES)
-new.facilities$FREQUENTLY <- scale(new.facilities$FREQUENTLY)
-new.facilities$ALWAYS <- scale(new.facilities$ALWAYS)
-new.facilities$total_officer_deaths <- scale(new.facilities$total_officer_deaths)
-new.facilities$mortality <- scale(new.facilities$mortality)
-
-p1 <- new.facilities %>%
-  ggplot(aes(x=mortality)) + geom_density() + 
-  labs(main="Mortality Rate", x = "Mortality", y="Density")
-p1
-```
-Inmate Deaths is a count variable with a good portion of the observations at 0 (center is at 1.54). 
-```{r}
-p1 <- new.facilities %>%
-  ggplot(aes(x=latest_inmate_population, y = mortality)) + geom_point() +
-  labs(main="Mortality Rate v. Inmate Population", x = "Latest Inmate Population", y = "Mortality")
-p2 <- new.facilities %>%
-  ggplot(aes(x=total_inmate_cases, y = mortality)) + geom_point() +
-  labs(main="Mortality Rate v. Inmate Cases", x = "Total Inmate Cases", y = "Mortality")
-p3 <- new.facilities %>%
-  ggplot(aes(x=total_officer_cases, y = mortality)) + geom_point() +
-  labs(main="Mortality Rate v. Officer Cases", x = "Total Officer Cases", y = "TMortality")
-p4 <- new.facilities %>%
-  ggplot(aes(x=total_officer_deaths, y = mortality)) + geom_point() +
-  labs(main="Mortality Rate v. Officer Deaths", x = "Total Officer Deaths", y = "Mortality")
-
-grid.arrange(p1, p2, p3, p4, ncol=2)
-```
-
-# Regression Modeling
-```{r Bayesian GLM w Gaussian Link}
-intercept.model <-stan_glm(data=facilities,
-                       formula = total_inmate_deaths ~1,
-                       family = gaussian(),
-                     refresh =0,
-                     refresh=0,
-                     seed =10)
-full.glm <- stan_glm(data=facilities,
-                       formula = total_inmate_deaths ~.,
-                       family = gaussian(),
-                     refresh =0,
-                     refresh=0,
-                     seed =1)
-```
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 # Prison Systems Data
-```{r}
-# add mortality column
-systems["mortality"] <- systems$total_inmate_deaths / systems$total_inmate_cases
-
-# drop unimportant columns
+```{r join with statewide data}
+# drop unimportant columns & add overall state data
 systems <- systems %>%
-  select(-c(system, max_inmate_population_2020))
-
+  inner_join(state.cases,by=c("system" = "state")) %>%
+  select(-c(max_inmate_population_2020))
+# rename state data columns
+colnames(systems)[8] <- "state_cases"
+colnames(systems)[9] <- "state_deaths"
 # drop NA's
 systems <- drop_na(systems)
-
+```
+```{r scale variables}
 # scale numerical values
 systems$latest_inmate_population <- scale(systems$latest_inmate_population)
 systems$total_inmate_cases <- scale(systems$total_inmate_cases)
-systems$total_officer_cases <- scale(systems$total_officer_cases)
 systems$total_inmate_deaths <- scale(systems$total_inmate_deaths)
+systems$total_officer_cases <- scale(systems$total_officer_cases)
 systems$total_officer_deaths <- scale(systems$total_officer_deaths)
-systems$mortality <- scale(systems$mortality)
 systems$inmate_tests <- scale(systems$inmate_tests)
+systems$state_cases <- scale(systems$state_cases)
+systems$state_deaths <- scale(systems$state_deaths)
 ```
+```{r initial response variable graphs}
+systems %>%
+  ggplot(aes(x=total_inmate_deaths)) + geom_density()
+p1 <- systems %>%
+  ggplot(aes(x=latest_inmate_population, y = total_inmate_deaths)) + geom_point() +
+  labs(x = "Latest Inmate Population", y = "Inmate Deaths")
+p2 <- systems %>%
+  ggplot(aes(x=total_inmate_cases, y = total_inmate_deaths)) + geom_point() +
+  labs(x = "Total Inmate Cases", y = "Inmate Deaths")
+p3 <- systems %>%
+  ggplot(aes(x=total_officer_cases, y = total_inmate_deaths)) + geom_point() +
+  labs(x = "Total Officer Cases", y = "Inmate Deaths")
+p4 <- systems %>%
+  ggplot(aes(x=total_officer_deaths, y = total_inmate_deaths)) + geom_point() +
+  labs(x = "Total Officer Deaths", y = "Inmate Deaths")
+p5 <- systems %>%
+  ggplot(aes(x=inmate_tests, y = total_inmate_deaths)) + geom_point() +
+  labs(x = "Inmate Tests", y = "Inmate Deaths")
+p6 <- systems %>%
+  ggplot(aes(x=state_deaths, y = total_inmate_deaths)) + geom_point() +
+  labs(x = "State Deaths", y = "Inmate Deaths")
+p7 <- systems %>%
+  ggplot(aes(x=state_cases, y = total_inmate_deaths)) + geom_point() +
+  labs(x = "State Cases", y = "Inmate Deaths")
+
+grid.arrange(p1, p2, p3, p4, p5, p6, p7, ncol=2)
+```
+Graph appears to be right-skewed with most values around 0.
+```{r flat prior}
+sys.data.only <- systems %>%
+  select(-c("system"))
+flat.prior <- stan_glm(data = sys.data.only, formula = total_inmate_deaths~., prior=NULL,
+                       family= gaussian(),
+                         refresh = 0, refresh = 0, seed = 1)
+posterior.flat.prior <- as.matrix(flat.prior)
+mcmc_areas(posterior.flat.prior, prob=0.90)
+
+color_scheme_set("red")
+ppc_dens_overlay(y = as.vector(flat.prior$y),
+                 yrep = posterior_predict(flat.prior, draws = 50))
+```
+
+```{r normal prior}
+normal.prior <- stan_glm(data = sys.data.only, formula = total_inmate_deaths~., prior=normal(0,1),
+                         family= gaussian(),
+                         refresh = 0, refresh = 0, seed = 2)
+posterior.normal.prior <- as.matrix(normal.prior)
+mcmc_areas(posterior.normal.prior, prob=0.90)
+
+color_scheme_set("red")
+ppc_dens_overlay(y = as.vector(normal.prior$y),
+                 yrep = posterior_predict(normal.prior, draws = 50))
+```
+
+```{r full interactions model}
+normal.full1 <- stan_glm(data = sys.data.only, 
+                        formula = total_inmate_deaths~ inmate_tests*(total_inmate_cases + latest_inmate_population+
+                                                                  total_officer_cases+ total_officer_deaths+
+                                                                  state_cases+ state_deaths), 
+                         prior=normal(0,1),
+                         family= gaussian(),
+                         refresh = 0, refresh = 0, seed = 4)
+posterior.normal.full1 <- as.matrix(normal.full1)
+mcmc_areas(posterior.normal.full1, prob=0.90)
+
+color_scheme_set("red")
+ppc_dens_overlay(y = as.vector(normal.full1$y),
+                 yrep = posterior_predict(normal.full1, draws = 50))
+```
+```{r}
+round(posterior_interval(normal.full1, prob = 0.90), 3)
+```
+inmate_tests:latest_inmate_population  0.116  1.532
+inmate_tests:total_officer_deaths     -0.719 -0.196
+```{r}
+normal.full2 <- stan_glm(data = sys.data.only, 
+                        formula = total_inmate_deaths~ inmate_tests*(total_officer_deaths + 
+                                                                       latest_inmate_population) +
+                          total_inmate_cases*(latest_inmate_population + total_officer_cases 
+                                              + total_officer_deaths + state_cases + state_deaths), 
+                         prior=normal(0,1),
+                         family= gaussian(),
+                         refresh = 0, refresh = 0, seed = 4)
+posterior.normal.full2 <- as.matrix(normal.full1)
+mcmc_areas(posterior.normal.full2, prob=0.90)
+
+color_scheme_set("red")
+ppc_dens_overlay(y = as.vector(normal.full2$y),
+                 yrep = posterior_predict(normal.full2, draws = 50))
+```
+```{r}
+round(posterior_interval(normal.full2, prob = 0.90), 3)
+```
+total_inmate_cases:latest_inmate_population  0.290  1.905
+total_inmate_cases:state_cases              -1.904 -0.031
+```{r}
+normal.full3 <- stan_glm(data = sys.data.only, 
+                        formula = total_inmate_deaths~ inmate_tests*(total_officer_deaths +
+                                                                       latest_inmate_population) +
+                          total_inmate_cases*(latest_inmate_population + state_cases) +
+                          latest_inmate_population*(total_officer_cases + total_officer_deaths + 
+                                                      state_cases + state_deaths), 
+                         prior=normal(0,1),
+                         family= gaussian(),
+                         refresh = 0, refresh = 0, seed = 4)
+posterior.normal.full3 <- as.matrix(normal.full3)
+mcmc_areas(posterior.normal.full3, prob=0.90)
+
+color_scheme_set("red")
+ppc_dens_overlay(y = as.vector(normal.full3$y),
+                 yrep = posterior_predict(normal.full3, draws = 50))
+```
+```{r}
+round(posterior_interval(normal.full3, prob = 0.90), 3)
+```
+latest_inmate_population:state_deaths         -1.137 -0.078
+```{r}
+normal.full4 <- stan_glm(data = sys.data.only, 
+                        formula = total_inmate_deaths~ inmate_tests*(total_officer_deaths +
+                                                                       latest_inmate_population) +
+                          total_inmate_cases*(latest_inmate_population + state_cases) +
+                          latest_inmate_population*(state_deaths) +
+                          total_officer_cases*(total_officer_deaths + state_cases + state_deaths), 
+                         prior=normal(0,1),
+                         family= gaussian(),
+                         refresh = 0, refresh = 0, seed = 4)
+posterior.normal.full4 <- as.matrix(normal.full3)
+mcmc_areas(posterior.normal.full4, prob=0.90)
+
+color_scheme_set("red")
+ppc_dens_overlay(y = as.vector(normal.full4$y),
+                 yrep = posterior_predict(normal.full4, draws = 50))
+```
+```{r}
+round(posterior_interval(normal.full4, prob = 0.90), 3)
+```
+state_deaths:total_officer_cases            -1.300 -0.027
+```{r}
+normal.full5 <- stan_glm(data = sys.data.only, 
+                        formula = total_inmate_deaths~ inmate_tests*(total_officer_deaths +
+                                                                       latest_inmate_population) +
+                          total_inmate_cases*(latest_inmate_population + state_cases) +
+                          latest_inmate_population*(state_deaths) +
+                          total_officer_cases*(state_deaths) +
+                          total_officer_deaths*(state_cases + state_deaths) +
+                          state_cases*(state_deaths), 
+                         prior=normal(0,1),
+                         family= gaussian(),
+                         refresh = 0, refresh = 0, seed = 4)
+posterior.normal.full5 <- as.matrix(normal.full5)
+mcmc_areas(posterior.normal.full5, prob=0.90)
+
+color_scheme_set("red")
+ppc_dens_overlay(y = as.vector(normal.full5$y),
+                 yrep = posterior_predict(normal.full5, draws = 50))
+```
+```{r}
+round(posterior_interval(normal.full5, prob = 0.90), 3)
+```
+state_cases:state_deaths                    -1.123 -0.266
+```{r}
+loo.ints <- loo(normal.full5, save_psis = T)
+loo.main <- loo(normal.prior, save_psis = T)
+loo_compare(loo.ints, loo.main)
+```
+```{r}
+sig.model <- stan_glm(data = sys.data.only, 
+                        formula = total_inmate_deaths~ inmate_tests*(total_officer_deaths +
+                                                                       latest_inmate_population) +
+                          total_inmate_cases*(latest_inmate_population + state_cases) +
+                          latest_inmate_population*(state_deaths) +
+                          state_cases*(state_deaths), 
+                         prior=normal(0,1),
+                         family= gaussian(),
+                         refresh = 0, refresh = 0, seed = 4)
+posterior.sig.model <- as.matrix(sig.model)
+mcmc_areas(posterior.sig.model, prob=0.90)
+
+color_scheme_set("red")
+ppc_dens_overlay(y = as.vector(sig.model$y),
+                 yrep = posterior_predict(sig.model, draws = 50)) 
+```
+```{r}
+round(posterior_interval(sig.model, prob = 0.90), 3)
+```
+```{r}
+sig2.model <- stan_glm(data = sys.data.only, 
+                        formula = total_inmate_deaths~ inmate_tests*(total_officer_deaths) +
+                          latest_inmate_population*(state_deaths) +
+                          state_cases*(state_deaths), 
+                         prior=normal(0,1),
+                         family= gaussian(),
+                         refresh = 0, refresh = 0, seed = 4)
+posterior.sig2.model <- as.matrix(sig2.model)
+mcmc_areas(posterior.sig2.model, prob=0.90)
+
+color_scheme_set("red")
+ppc_dens_overlay(y = as.vector(sig2.model$y),
+                 yrep = posterior_predict(sig2.model, draws = 50))
+```
+```{r}
+round(posterior_interval(sig2.model, prob = 0.90), 3)
+```
+```{r}
+loo.ints <- loo(sig2.model, save_psis = T)
+loo.main <- loo(normal.prior, save_psis = T)
+loo_compare(loo.ints, loo.main)
+```
+```{r}
+loo.ints
+loo.main
+```
+Looic is much lower for model with interactions compared to model with only main effects.
 
 ```{r}
-systems %>%
-  ggplot(aes(x=mortality)) + geom_density()
-p1 <- systems %>%
-  ggplot(aes(x=latest_inmate_population, y = mortality)) + geom_point() +
-  labs(main="Mortality Rate v. Inmate Population", x = "Latest Inmate Population", y = "Mortality")
-p2 <- systems %>%
-  ggplot(aes(x=total_inmate_cases, y = mortality)) + geom_point() +
-  labs(main="Mortality Rate v. Inmate Cases", x = "Total Inmate Cases", y = "Mortality")
-p3 <- systems %>%
-  ggplot(aes(x=total_officer_cases, y = mortality)) + geom_point() +
-  labs(main="Mortality Rate v. Officer Cases", x = "Total Officer Cases", y = "TMortality")
-p4 <- systems %>%
-  ggplot(aes(x=total_officer_deaths, y = mortality)) + geom_point() +
-  labs(main="Mortality Rate v. Officer Deaths", x = "Total Officer Deaths", y = "Mortality")
-p5 <- systems %>%
-  ggplot(aes(x=inmate_tests, y = mortality)) + geom_point() +
-  labs(main="Mortality Rate v. Inmate Tests", x = "Inmate Tests", y = "Mortality")
-
-grid.arrange(p1, p2, p3, p4, p5, ncol=2)
+plot(loo.ints, label_points=TRUE)
+plot(loo.main, label_points=TRUE)
 ```
+3, 5, 9, 22, 28, 32, 35, 37, 38, 43
+```{r}
+
+```
+
 
