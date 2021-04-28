@@ -1,0 +1,782 @@
+---
+title: "EDA"
+author: "Sarah Tillman"
+date: "4/25/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# library & packages
+```{r load libraries, error=FALSE, message=FALSE}
+library(plyr)
+library(magrittr)
+library(readr)
+library(tidyverse)
+library(gridExtra)
+```
+
+
+# Cases & Deaths Data
+```{r load data, message=FALSE}
+mask_use <- read_csv(file="../mask-use/mask-use-by-county.csv")
+cases_total <- read_csv(file="../us-counties.csv")
+cases_recent <- read_csv(file="../us-counties-recent.csv")
+prison_facilities <- read_csv(file="../prisons/facilities.csv")
+systems <- read.csv(file="../prisons/systems.csv")
+```
+
+# Cases Datasets
+
+```{r add state wide data, error=FALSE, message=FALSE}
+# grouping county level data to create state wide totals
+state_total <- cases_total %>%
+  group_by(state, date) %>%
+    summarise(total.cases = sum(cases),
+              total.deaths = sum(deaths),
+              count = n())
+
+state_recent <- cases_recent %>%
+  group_by(state, date) %>%
+    summarise(total.cases = sum(cases),
+              total.deaths = sum(deaths),
+              count = n())
+
+# add mask usage data to recent data by county
+colnames(mask_use)[1] <- "fips" 
+county_rankings <- inner_join(cases_recent, mask_use, by = "fips")
+```
+
+
+# Prison Facilities & Systems
+
+```{r add categorical vars, message=FALSE}
+group_by(prison_facilities, facility_type) %>%
+  summarise(count = n())
+
+# remove reservation jail observation
+# remove US Marshall's observation
+
+prison_facilities <- prison_facilities %>%
+  filter(facility_type != "Reservation jail" & facility_type != "U.S. Marshalls")
+
+group_by(prison_facilities, facility_type) %>%
+  summarise(count = n())
+
+# add grouped facility type variable by federal or state facility
+# add prison variable which indicates that facility is a prison
+
+federal_facility <- rep(0, nrow(prison_facilities))
+prison_facilities["federal"] <- federal_facility
+state_facility <- rep(0, nrow(prison_facilities))
+prison_facilities["state"] <- state_facility
+facility_group <- rep(0, nrow(prison_facilities))
+prison_facilities["facility_group"] <- facility_group
+prison <- rep(0, nrow(prison_facilities))
+prison_facilities["prison"] <- prison
+
+prison_facilities <- prison_facilities %>%
+  mutate (federal = case_when(
+  facility_type == "Federal halfway house"~ 1,
+  facility_type == "Federal prison"~ 1,
+  TRUE ~ 0)) %>%
+  mutate (state = case_when(
+  facility_type == "State facility"~ 1,
+  facility_type == "State halfway house"~ 1,
+  facility_type == "State juvenile detention"~ 1,
+  facility_type == "State prison"~ 1,
+  facility_type == "State rehabilitation center"~ 1,
+  facility_type == "State work camp"~ 1,
+  TRUE ~ 0)) %>%
+  mutate(facility_group = case_when(
+    federal == 1 ~ 2,
+    state == 1 ~ 1,
+    TRUE ~ 0)) %>%
+  mutate(prison = case_when(
+    facility_type == "State prison"~ 1,
+    facility_type == "Federal prison"~ 1,
+    TRUE ~ 0))
+
+group_by(prison_facilities, prison, facility_type) %>%
+  summarise(count = n())
+```
+
+```{r drop irrelevant data}
+# drop unimportant columns
+facilities <- select(prison_facilities, -c(nyt_id, facility_lng, facility_lat, max_inmate_population_2020, note,
+                                           facility_city))
+# drop rows with na values for variables of interest
+facilities <- drop_na(facilities)
+```
+
+# Graphing Variables & Predicting Relationships
+```{r prison types}
+p1 <-facilities %>%
+  ggplot(aes(x=facility_group)) + geom_bar() + labs(x="Facility Type", title="State, Federal or Local Facility")
+p2 <-facilities %>%
+  ggplot(aes(x=prison)) + geom_bar() + labs(x="Prison", title="Prison v. Other Facility Types")
+
+grid.arrange(p1, p2, ncol=2)
+```
+
+```{r summarize reponse vars}
+p1 <-facilities %>%
+  ggplot(aes(x=total_inmate_cases, y=total_inmate_deaths)) + geom_point() + 
+  labs(x="Inmate Cases", y= "Inmate Deaths", title="Inmate Deaths v. Cases")
+p2 <-facilities %>%
+  ggplot(aes(x=total_officer_cases, y=total_officer_deaths)) + geom_point() + 
+  labs(x="Officer Cases", y= "Officer Deaths", title="Officer Deaths v. Cases")
+p3 <-facilities %>%
+  ggplot(aes(x=total_inmate_cases, y=total_officer_cases)) + geom_point() + 
+  labs(x="Inmate Cases", y= "Officer Cases", title="Inmate v. Officer Cases")
+p4 <-facilities %>%
+  ggplot(aes(x=total_inmate_deaths, y=total_officer_deaths)) + geom_point() + 
+  labs(x="Inmate Deaths", y= "Officer Deaths", title="Inmate v. Officer Deaths")
+
+grid.arrange(p1, p2, p3, p4, ncol=2)
+```
+
+```{r response vars as proportions of total pop}
+# calculate # of cases & deaths as a proportion of the inmate population
+facilities["inmate_cases_prop"] <- facilities$total_inmate_cases / facilities$latest_inmate_population * 100
+facilities["inmate_deaths_prop"] <- facilities$total_inmate_deaths / facilities$latest_inmate_population * 100
+facilities["officer_cases_prop"] <- facilities$total_officer_cases / facilities$latest_inmate_population * 100
+facilities["officer_deaths_prop"] <- facilities$total_officer_deaths / facilities$latest_inmate_population * 100
+
+p1 <-facilities %>%
+  ggplot(aes(x=inmate_cases_prop, y=inmate_deaths_prop)) + geom_point() + 
+  labs(x="Inmate Cases", y= "Inmate Deaths", title="Inmate Deaths v. Cases")
+p2 <-facilities %>%
+  ggplot(aes(x=officer_cases_prop, y=officer_deaths_prop)) + geom_point() + 
+  labs(x="Officer Cases", y= "Officer Deaths", title="Officer Deaths v. Cases")
+p3 <-facilities %>%
+  ggplot(aes(x=inmate_cases_prop, y=officer_cases_prop)) + geom_point() + 
+  labs(x="Inmate Cases", y= "Officer Cases", title="Inmate v. Officer Cases")
+p4 <-facilities %>%
+  ggplot(aes(x=inmate_deaths_prop, y=officer_deaths_prop)) + geom_point() + 
+  labs(x="Inmate Deaths", y= "Officer Deaths", title="Inmate v. Officer Deaths")
+
+grid.arrange(p1, p2, p3, p4, ncol=2)
+```
+
+```{r rv's vs. total inmate population}
+p1 <-facilities %>%
+  ggplot(aes(y=total_inmate_cases, x=latest_inmate_population, color=facility_group)) + geom_point() + 
+  labs(x="Inmate Population", y= "Inmate Cases", title="Inmate Cases v. Population")
+p2 <-facilities %>%
+  ggplot(aes(y=total_officer_cases, x=latest_inmate_population, color=facility_group)) + geom_point() + 
+  labs(x="Inmate Population", y= "Officer Cases", title="Officer Cases v. Population")
+p3 <-facilities %>%
+  ggplot(aes(y=total_inmate_deaths, x=latest_inmate_population, color=facility_group)) + geom_point() + 
+  labs(x="Inmate Population", y= "Inmate Deaths", title="Inmate Deaths v. Population")
+p4 <-facilities %>%
+  ggplot(aes(y=total_officer_deaths, x=latest_inmate_population, color=facility_group)) + geom_point() + 
+  labs(x="Inmate Population", y= "Officer Deaths", title="Officer Deaths v. Population")
+
+grid.arrange(p1, p2, p3, p4, ncol=2)
+```
+
+```{r rv by facility groups}
+p1 <-facilities %>%
+  ggplot(aes(y=total_inmate_cases, x=latest_inmate_population, color=facility_group)) + geom_point() + 
+  labs(x="Inmate Population", y= "Inmate Cases", title="Inmate Cases v. Population") +
+  facet_grid(cols=vars(facility_group))
+p2 <-facilities %>%
+  ggplot(aes(y=total_officer_cases, x=latest_inmate_population, color=facility_group)) + geom_point() + 
+  labs(x="Inmate Population", y= "Officer Cases", title="Officer Cases v. Population")+
+  facet_grid(cols=vars(facility_group))
+p3 <-facilities %>%
+  ggplot(aes(y=total_inmate_deaths, x=latest_inmate_population, color=facility_group)) + geom_point() + 
+  labs(x="Inmate Population", y= "Inmate Deaths", title="Inmate Deaths v. Population") +
+  facet_grid(cols=vars(facility_group))
+p4 <-facilities %>%
+  ggplot(aes(y=total_officer_deaths, x=latest_inmate_population, color=facility_group)) + geom_point() + 
+  labs(x="Inmate Population", y= "Officer Deaths", title="Officer Deaths v. Population") +
+  facet_grid(cols=vars(facility_group))
+
+grid.arrange(p1, p2, p3, p4, ncol=2)
+```
+There do seem to be more officer cases and deaths for federal facilities & potentially fewer inmate deaths for local prisons
+
+```{r rv by prison group}
+p1 <-facilities %>%
+  ggplot(aes(y=total_inmate_cases, x=latest_inmate_population, color=prison)) + geom_point() + 
+  labs(x="Inmate Population", y= "Inmate Cases", title="Inmate Cases v. Population") +
+  facet_grid(cols=vars(prison))
+p2 <-facilities %>%
+  ggplot(aes(y=total_officer_cases, x=latest_inmate_population, color=prison)) + geom_point() + 
+  labs(x="Inmate Population", y= "Officer Cases", title="Officer Cases v. Population")+
+  facet_grid(cols=vars(prison))
+p3 <-facilities %>%
+  ggplot(aes(y=total_inmate_deaths, x=latest_inmate_population, color=prison)) + geom_point() + 
+  labs(x="Inmate Population", y= "Inmate Deaths", title="Inmate Deaths v. Population") +
+  facet_grid(cols=vars(prison))
+p4 <-facilities %>%
+  ggplot(aes(y=total_officer_deaths, x=latest_inmate_population, color=prison)) + geom_point() + 
+  labs(x="Inmate Population", y= "Officer Deaths", title="Officer Deaths v. Population") +
+  facet_grid(cols=vars(prison))
+
+grid.arrange(p1, p2, p3, p4, ncol=2)
+```
+Maybe fewer deaths & cases per inmate population for non-prisons vs. prisons.
+
+# Deaths:Cases Ratio to Estimate Lethality
+```{r using deaths:cases ratio}
+facilities["inmate_lethality"] <- facilities$total_inmate_deaths / facilities$total_inmate_cases * 100
+facilities["officer_lethality"] <- facilities$total_officer_deaths / facilities$total_officer_cases * 100
+facilities[is.na(facilities)] <- 0
+p1 <-facilities %>%
+  ggplot(aes(y=inmate_lethality, x=latest_inmate_population, color=facility_group)) + geom_point() + 
+  labs(x="Inmate Population", y= "Inmate Lethality", title="Inmate Lethality v. Population") +
+  facet_grid(cols=vars(facility_group))
+p2 <-facilities %>%
+  ggplot(aes(y=officer_lethality, x=latest_inmate_population, color=facility_group)) + geom_point() + 
+  labs(x="Inmate Population", y= "Officer Lethality", title="Officer Lethality v. Population")+
+  facet_grid(cols=vars(facility_group))
+p3 <-facilities %>%
+  ggplot(aes(y=inmate_lethality, x=latest_inmate_population, color=prison)) + geom_point() + 
+  labs(x="Inmate Population", y= "Inmate Lethality", title="Inmate Lethality v. Population") +
+  facet_grid(cols=vars(prison))
+p4 <-facilities %>%
+  ggplot(aes(y=officer_lethality, x=latest_inmate_population, color=prison)) + geom_point() + 
+  labs(x="Inmate Population", y= "Officer Lethality", title="Officer Lethality v. Population") +
+  facet_grid(cols=vars(prison))
+
+grid.arrange(p1, p2, p3, p4, ncol=2)
+```
+Difficult to assess patterns due to clustering of data, so may not be significantly different
+
+```{r}
+facilities %>%
+  ggplot(aes(y=officer_lethality, x=inmate_lethality, color=facility_group)) + geom_point() + 
+  labs(y="Officer Lethality", x= "Inmate Lethality", title="Inmate v. Officer Lethality")
+```
+Officer data might be too small of a sample size per facility to assess properly.
+
+
+# Prison Systems Data
+
+```{r summarize response variables}
+systems <- drop_na(systems)
+
+p1 <-systems %>%
+  ggplot(aes(x=total_inmate_cases, y=total_inmate_deaths)) + geom_point() + 
+  labs(x="Inmate Cases", y= "Inmate Deaths", title="Inmate Deaths v. Cases")
+p2 <-systems %>%
+  ggplot(aes(x=total_officer_cases, y=total_officer_deaths)) + geom_point() + 
+  labs(x="Officer Cases", y= "Officer Deaths", title="Officer Deaths v. Cases")
+p3 <-systems %>%
+  ggplot(aes(x=total_inmate_cases, y=total_officer_cases)) + geom_point() + 
+  labs(x="Inmate Cases", y= "Officer Cases", title="Inmate v. Officer Cases")
+p4 <-systems %>%
+  ggplot(aes(x=total_inmate_deaths, y=total_officer_deaths)) + geom_point() + 
+  labs(x="Inmate Deaths", y= "Officer Deaths", title="Inmate v. Officer Deaths")
+
+grid.arrange(p1, p2, p3, p4, ncol=2)
+```
+
+```{r}
+p1 <-systems %>%
+  ggplot(aes(y=total_inmate_cases, x=latest_inmate_population)) + geom_point() + 
+  labs(x="Inmate Population", y= "Inmate Cases", title="Inmate Cases v. Population")
+p2 <-systems %>%
+  ggplot(aes(y=total_officer_cases, x=latest_inmate_population)) + geom_point() + 
+  labs(x="Inmate Population", y= "Officer Cases", title="Officer Cases v. Population")
+p3 <-systems %>%
+  ggplot(aes(y=total_inmate_deaths, x=latest_inmate_population)) + geom_point() + 
+  labs(x="Inmate Population", y= "Inmate Deaths", title="Inmate Deaths v. Population")
+p4 <-systems %>%
+  ggplot(aes(y=total_officer_deaths, x=latest_inmate_population)) + geom_point() + 
+  labs(x="Inmate Population", y= "Officer Deaths", title="Officer Deaths v. Population")
+
+grid.arrange(p1, p2, p3, p4, ncol=2)
+```
+
+```{r}
+# calculate # of cases & deaths as a proportion of the inmate population
+systems["inmate_cases_prop"] <- systems$total_inmate_cases / systems$latest_inmate_population * 100
+systems["inmate_deaths_prop"] <- systems$total_inmate_deaths / systems$latest_inmate_population * 100
+systems["officer_cases_prop"] <- systems$total_officer_cases / systems$latest_inmate_population * 100
+systems["officer_deaths_prop"] <- systems$total_officer_deaths / systems$latest_inmate_population * 100
+
+# calculate lethality rates -- deaths:cases
+systems["inmate_lethality"] <- systems$total_inmate_deaths / systems$total_inmate_cases * 100
+systems["officer_lethality"] <- systems$total_officer_deaths / systems$total_officer_cases * 100
+systems[is.na(systems)] <- 0
+
+p1 <-systems %>%
+  ggplot(aes(x=inmate_cases_prop, y=inmate_deaths_prop)) + geom_point() + 
+  labs(x="Inmate Cases", y= "Inmate Deaths", title="Inmate Deaths v. Cases")
+p2 <-systems %>%
+  ggplot(aes(x=officer_cases_prop, y=officer_deaths_prop)) + geom_point() + 
+  labs(x="Officer Cases", y= "Officer Deaths", title="Officer Deaths v. Cases")
+p3 <-systems %>%
+  ggplot(aes(x=inmate_cases_prop, y=officer_cases_prop)) + geom_point() + 
+  labs(x="Inmate Cases", y= "Officer Cases", title="Inmate v. Officer Cases")
+p4 <-systems %>%
+  ggplot(aes(x=inmate_deaths_prop, y=officer_deaths_prop)) + geom_point() + 
+  labs(x="Inmate Deaths", y= "Officer Deaths", title="Inmate v. Officer Deaths")
+
+grid.arrange(p1, p2, p3, p4, ncol=2)
+```
+
+```{r lethality rates by system}
+p1 <-systems %>%
+  ggplot(aes(y=inmate_lethality, x=latest_inmate_population)) + geom_point() + 
+  labs(x="Inmate Population", y= "Inmate Lethality", title="Inmate Lethality v. Population")
+p2 <-systems %>%
+  ggplot(aes(y=officer_lethality, x=latest_inmate_population)) + geom_point() + 
+  labs(x="Inmate Population", y= "Officer Lethality", title="Officer Lethality v. Population")
+p3 <-systems %>%
+  ggplot(aes(y=inmate_lethality, x=max_inmate_population_2020)) + geom_point() + 
+  labs(x="Max Inmate Population", y= "Inmate Lethality", title="Inmate Lethality v. Max Population")
+p4 <-systems %>%
+  ggplot(aes(y=officer_lethality, x=max_inmate_population_2020)) + geom_point() + 
+  labs(x=" Max Inmate Population", y= "Officer Lethality", title="Officer Lethality v. Max Population")
+
+grid.arrange(p1, p2, p3, p4, ncol=2)
+```
+There does appear to be a positive correlation between lethality and inmate population for both officers and inmates. Latest population and max population appear to have similar plots
+
+```{r inmate tests}
+p1 <-systems %>%
+  ggplot(aes(y=total_inmate_cases, x=inmate_tests)) + geom_point() + 
+  labs(x="Inmate Tests", y= "Inmate Cases", title="Inmate Cases v. Inmate Tests")
+p2 <-systems %>%
+  ggplot(aes(y=total_officer_cases, x=inmate_tests)) + geom_point() + 
+  labs(x="Inmate Tests", y= "Officer Cases", title="Officer Cases v. Inmate Tests")
+p3 <-systems %>%
+  ggplot(aes(y=total_inmate_deaths, x=inmate_tests)) + geom_point() + 
+  labs(x="Inmate Tests", y= "Inmate Deaths", title="Inmate Deaths v. Inmate Tests")
+p4 <-systems %>%
+  ggplot(aes(y=total_officer_deaths, x=inmate_tests)) + geom_point() + 
+  labs(x="Inmate Tests", y= "Officer Deaths", title="Officer Deaths v. Inmate Tests")
+p5 <-systems %>%
+  ggplot(aes(y=inmate_lethality, x=inmate_tests)) + geom_point() + 
+  labs(x="Inmate Tests", y= "Inmate Lethality", title="Inmate Lethality v. Inmate Tests")
+p6 <-systems %>%
+  ggplot(aes(y=officer_lethality, x=inmate_tests)) + geom_point() + 
+  labs(x="Inmate Tests", y= "Officer Lethality", title="Officer Lethality v. Inmate Tests")
+
+grid.arrange(p1, p2, p3, p4, p5, p6, ncol=2)
+```
+There appears to be an association between tests and the number of cases and deaths as well. This could be because more tests means more recorded cases and deaths attributed to COVID-19 or maybe facilities having an outbreak were afforded more tests in an effort to monitor/slow the outbreak. Lethality appears to be less correlated with the number of tests ordered than cases or deaths alone for both inmates and officers.
+
+
+# Mask Use Data
+```{r adding mask usage to prison facility data}
+# add mask use data for each prison facility
+colnames(facilities)[4] <- "fips"
+prisons_masks <- inner_join(facilities, mask_use, by = "fips")
+
+# ratio of never wears mask to always wears mask
+prisons_masks["mask_ratio"] <- prisons_masks$NEVER / prisons_masks$ALWAYS * 100
+```
+
+```{r never wearing masks v. rv's}
+p1 <-prisons_masks %>%
+  ggplot(aes(y=total_inmate_cases, x=NEVER)) + geom_point() + 
+  labs(x="Never Wear Masks", y= "Inmate Cases", title="Inmate Cases v. Never Wear Mask")
+p2 <-prisons_masks %>%
+  ggplot(aes(y=total_officer_cases, x=NEVER)) + geom_point() + 
+  labs(x="Never Wear Masks", y= "Officer Cases", title="Officer Cases v. Never Wear Mask")
+p3 <-prisons_masks %>%
+  ggplot(aes(y=total_inmate_deaths, x=NEVER)) + geom_point() + 
+  labs(x="Never Wear Masks", y= "Inmate Deaths", title="Inmate Deaths v. Never Wear Mask")
+p4 <-prisons_masks %>%
+  ggplot(aes(y=total_officer_deaths, x=NEVER)) + geom_point() + 
+  labs(x="Never Wear Masks", y= "Officer Deaths", title="Officer Deaths v. Never Wear Mask")
+p5 <-prisons_masks %>%
+  ggplot(aes(y=inmate_lethality, x=NEVER)) + geom_point() + 
+  labs(x="Never Wear Masks", y= "Inmate Lethality", title="Inmate Lethality v. Never Wear Mask")
+p6 <-prisons_masks %>%
+  ggplot(aes(y=officer_lethality, x=NEVER)) + geom_point() + 
+  labs(x="Never Wear Masks", y= "Officer Lethality", title="Officer Lethality v. Never Wear Mask")
+
+grid.arrange(p1, p2, p3, p4, p5, p6, ncol=2)
+```
+
+```{r always wear masks v. rv's}
+p1 <-prisons_masks %>%
+  ggplot(aes(y=total_inmate_cases, x=ALWAYS)) + geom_point() + 
+  labs(x="Always Wear Masks", y= "Inmate Cases", title="Inmate Cases v. Always Wear Mask")
+p2 <-prisons_masks %>%
+  ggplot(aes(y=total_officer_cases, x=ALWAYS)) + geom_point() + 
+  labs(x="Always Wear Masks", y= "Officer Cases", title="Officer Cases v. Always Wear Mask")
+p3 <-prisons_masks %>%
+  ggplot(aes(y=total_inmate_deaths, x=ALWAYS)) + geom_point() + 
+  labs(x="Always Wear Masks", y= "Inmate Deaths", title="Inmate Deaths v. Always Wear Mask")
+p4 <-prisons_masks %>%
+  ggplot(aes(y=total_officer_deaths, x=ALWAYS)) + geom_point() + 
+  labs(x="Always Wear Masks", y= "Officer Deaths", title="Officer Deaths v. Always Wear Mask")
+p5 <-prisons_masks %>%
+  ggplot(aes(y=inmate_lethality, x=ALWAYS)) + geom_point() + 
+  labs(x="Always Wear Masks", y= "Inmate Lethality", title="Inmate Lethality v. Always Wear Mask")
+p6 <-prisons_masks %>%
+  ggplot(aes(y=officer_lethality, x=ALWAYS)) + geom_point() + 
+  labs(x="Always Wear Masks", y= "Officer Lethality", title="Officer Lethality v. Always Wear Mask")
+
+grid.arrange(p1, p2, p3, p4, p5, p6, ncol=2)
+```
+
+```{r mask wearing ratio}
+p1 <-prisons_masks %>%
+  ggplot(aes(y=total_inmate_cases, x=mask_ratio)) + geom_point() + 
+  labs(x="Mask Ratio", y= "Inmate Cases", title="Inmate Cases v. Mask Ratio")
+p2 <-prisons_masks %>%
+  ggplot(aes(y=total_officer_cases, x=mask_ratio)) + geom_point() + 
+  labs(x="Mask Ratio", y= "Officer Cases", title="Officer Cases v. Mask Ratio")
+p3 <-prisons_masks %>%
+  ggplot(aes(y=total_inmate_deaths, x=mask_ratio)) + geom_point() + 
+  labs(x="Mask Ratio", y= "Inmate Deaths", title="Inmate Deaths v. Mask Ratio")
+p4 <-prisons_masks %>%
+  ggplot(aes(y=total_officer_deaths, x=mask_ratio)) + geom_point() + 
+  labs(x="Mask Ratio", y= "Officer Deaths", title="Officer Deaths v. Mask Ratio")
+p5 <-prisons_masks %>%
+  ggplot(aes(y=inmate_lethality, x=mask_ratio)) + geom_point() + 
+  labs(x="Mask Ratio", y= "Inmate Lethality", title="Inmate Lethality v. Mask Ratio")
+p6 <-prisons_masks %>%
+  ggplot(aes(y=officer_lethality, x=mask_ratio)) + geom_point() + 
+  labs(x="Mask Ratio", y= "Officer Lethality", title="Officer Lethality v. Mask Ratio")
+
+grid.arrange(p1, p2, p3, p4, p5, p6, ncol=2)
+```
+It does appear that there may be a slightly negative correlation between the ratio of those who never wear masks to those who always do 
+
+```{r}
+p1 <-prisons_masks %>%
+  ggplot(aes(y=total_inmate_cases, x=NEVER+RARELY)) + geom_point() + 
+  labs(x="Mask Ratio", y= "Inmate Cases", title="Inmate Cases")
+p2 <-prisons_masks %>%
+  ggplot(aes(y=total_officer_cases, x=NEVER+RARELY)) + geom_point() + 
+  labs(x="Mask Ratio", y= "Officer Cases", title="Officer Cases")
+p3 <-prisons_masks %>%
+  ggplot(aes(y=total_inmate_deaths, x=NEVER+RARELY)) + geom_point() + 
+  labs(x="Mask Ratio", y= "Inmate Deaths", title="Inmate Deaths")
+p4 <-prisons_masks %>%
+  ggplot(aes(y=total_officer_deaths, x=NEVER+RARELY)) + geom_point() + 
+  labs(x="Mask Ratio", y= "Officer Deaths", title="Officer Deaths")
+p5 <-prisons_masks %>%
+  ggplot(aes(y=inmate_lethality, x=NEVER+RARELY)) + geom_point() + 
+  labs(x="Mask Ratio", y= "Inmate Lethality", title="Inmate Lethality")
+p6 <-prisons_masks %>%
+  ggplot(aes(y=officer_lethality, x=NEVER+RARELY)) + geom_point() + 
+  labs(x="Mask Ratio", y= "Officer Lethality", title="Officer Lethality")
+
+grid.arrange(p1, p2, p3, p4, p5, p6, ncol=2)
+```
+
+
+```{r}
+p1 <- prisons_masks %>%
+  ggplot(aes(y=total_inmate_cases, x=NEVER, color=prison)) + geom_point() + 
+  labs(x="Inmate Population", y= "Inmate Cases", title="Inmate Cases") +
+  facet_grid(cols=vars(prison))
+p2 <-prisons_masks %>%
+  ggplot(aes(y=total_officer_cases, x=NEVER, color=prison)) + geom_point() + 
+  labs(x="Inmate Population", y= "Officer Cases", title="Officer Cases")+
+  facet_grid(cols=vars(prison))
+p3 <-prisons_masks %>%
+  ggplot(aes(y=total_inmate_deaths, x=NEVER, color=prison)) + geom_point() + 
+  labs(x="Inmate Population", y= "Inmate Deaths", title="Inmate Deaths") +
+  facet_grid(cols=vars(prison))
+p4 <-prisons_masks %>%
+  ggplot(aes(y=total_officer_deaths, x=NEVER, color=prison)) + geom_point() + 
+  labs(x="Inmate Population", y= "Officer Deaths", title="Officer Deaths") +
+  facet_grid(cols=vars(prison))
+p5 <-prisons_masks %>%
+  ggplot(aes(y=inmate_lethality, x=NEVER, color=prison)) + geom_point() + 
+  labs(x="Inmate Population", y= "Inmate Lethality", title="Inmate Lethality") +
+  facet_grid(cols=vars(prison))
+p6 <-prisons_masks %>%
+  ggplot(aes(y=officer_lethality, x=NEVER, color=prison)) + geom_point() + 
+  labs(x="Inmate Population", y= "Officer Lethality", title="Officer Lethality") +
+  facet_grid(cols=vars(prison))
+
+grid.arrange(p1, p2, p3, p4, p5, p6, ncol=2)
+```
+
+```{r}
+p1 <- prisons_masks %>%
+  ggplot(aes(y=total_inmate_cases, x=ALWAYS, color=prison)) + geom_point() + 
+  labs(x="Inmate Population", y= "Inmate Cases", title="Inmate Cases") +
+  facet_grid(cols=vars(prison))
+p2 <-prisons_masks %>%
+  ggplot(aes(y=total_officer_cases, x=ALWAYS, color=prison)) + geom_point() + 
+  labs(x="Inmate Population", y= "Officer Cases", title="Officer Cases")+
+  facet_grid(cols=vars(prison))
+p3 <-prisons_masks %>%
+  ggplot(aes(y=total_inmate_deaths, x=ALWAYS, color=prison)) + geom_point() + 
+  labs(x="Inmate Population", y= "Inmate Deaths", title="Inmate Deaths") +
+  facet_grid(cols=vars(prison))
+p4 <-prisons_masks %>%
+  ggplot(aes(y=total_officer_deaths, x=ALWAYS, color=prison)) + geom_point() + 
+  labs(x="Inmate Population", y= "Officer Deaths", title="Officer Deaths") +
+  facet_grid(cols=vars(prison))
+p5 <-prisons_masks %>%
+  ggplot(aes(y=inmate_lethality, x=ALWAYS, color=prison)) + geom_point() + 
+  labs(x="Inmate Population", y= "Inmate Lethality", title="Inmate Lethality") +
+  facet_grid(cols=vars(prison))
+p6 <-prisons_masks %>%
+  ggplot(aes(y=officer_lethality, x=ALWAYS, color=prison)) + geom_point() + 
+  labs(x="Inmate Population", y= "Officer Lethality", title="Officer Lethality") +
+  facet_grid(cols=vars(prison))
+
+grid.arrange(p1, p2, p3, p4, p5, p6, ncol=2)
+```
+
+```{r}
+p1 <- prisons_masks %>%
+  ggplot(aes(y=latest_inmate_population, x=ALWAYS, color=prison)) + geom_point() + 
+  labs(x="Always Wear Masks", y= "Inmate Population", title="Inmate Population v. Always Wear Masks") +
+  facet_grid(cols=vars(prison))
+p2 <- prisons_masks %>%
+  ggplot(aes(y=latest_inmate_population, x=ALWAYS, color=facility_group)) + geom_point() + 
+  labs(x="Always Wear Masks", y= "Inmate Population", title="Inmate Population v. Always Wear Masks") +
+  facet_grid(cols=vars(facility_group))
+
+grid.arrange(p1, p2, ncol=1)
+```
+
+```{r}
+p1 <- prisons_masks %>%
+  ggplot(aes(y=inmate_cases_prop, x=NEVER, color=prison)) + geom_point() + 
+  labs(x="Inmate Population", y= "Inmate Cases", title="Inmate Cases") +
+  facet_grid(cols=vars(prison))
+p2 <-prisons_masks %>%
+  ggplot(aes(y=officer_cases_prop, x=NEVER, color=prison)) + geom_point() + 
+  labs(x="Inmate Population", y= "Officer Cases", title="Officer Cases")+
+  facet_grid(cols=vars(prison))
+p3 <-prisons_masks %>%
+  ggplot(aes(y=inmate_deaths_prop, x=NEVER, color=prison)) + geom_point() + 
+  labs(x="Inmate Population", y= "Inmate Deaths", title="Inmate Deaths") +
+  facet_grid(cols=vars(prison))
+p4 <-prisons_masks %>%
+  ggplot(aes(y=officer_deaths_prop, x=NEVER, color=prison)) + geom_point() + 
+  labs(x="Inmate Population", y= "Officer Deaths", title="Officer Deaths") +
+  facet_grid(cols=vars(prison))
+
+grid.arrange(p1, p2, p3, p4, ncol=2)
+```
+
+
+
+# Georgia Specific Prison Facilities Data
+```{r}
+GA_facilities <- prisons_masks %>%
+  filter(facility_state == "Georgia")
+
+GA_facilities["metro"] <- rep(0, nrow(GA_facilities))
+
+p1 <-GA_facilities %>%
+  ggplot(aes(x=facility_group)) + geom_bar() + labs(x="Facility Type", title="State, Federal or Local Facility")
+p2 <-GA_facilities %>%
+  ggplot(aes(x=prison)) + geom_bar() + labs(x="Prison", title="Prison v. Other Facility Types")
+
+grid.arrange(p1, p2, ncol=2)
+```
+
+```{r}
+p1 <-GA_facilities %>%
+  ggplot(aes(y=total_inmate_cases, x=latest_inmate_population, color=prison)) + geom_point() + 
+  labs(x="Inmate Population", y= "Inmate Cases", title="Inmate Cases v. Population") +
+  facet_grid(cols=vars(prison))
+p2 <-GA_facilities %>%
+  ggplot(aes(y=total_officer_cases, x=latest_inmate_population, color=prison)) + geom_point() + 
+  labs(x="Inmate Population", y= "Officer Cases", title="Officer Cases v. Population")+
+  facet_grid(cols=vars(prison))
+p3 <-GA_facilities %>%
+  ggplot(aes(y=total_inmate_deaths, x=latest_inmate_population, color=prison)) + geom_point() + 
+  labs(x="Inmate Population", y= "Inmate Deaths", title="Inmate Deaths v. Population") +
+  facet_grid(cols=vars(prison))
+p4 <-GA_facilities %>%
+  ggplot(aes(y=total_officer_deaths, x=latest_inmate_population, color=prison)) + geom_point() + 
+  labs(x="Inmate Population", y= "Officer Deaths", title="Officer Deaths v. Population") +
+  facet_grid(cols=vars(prison))
+
+grid.arrange(p1, p2, p3, p4, ncol=2)
+```
+In GA data, officer deaths are so small, they shouldn't be used as a predictive or response variable.
+
+```{r}
+p1 <- GA_facilities %>%
+  ggplot(aes(y=inmate_cases_prop, x=NEVER, color=prison)) + geom_point() + 
+  labs(x="Inmate Population", y= "Inmate Cases", title="Inmate Cases") +
+  facet_grid(cols=vars(prison))
+p2 <-GA_facilities %>%
+  ggplot(aes(y=officer_cases_prop, x=NEVER, color=prison)) + geom_point() + 
+  labs(x="Inmate Population", y= "Officer Cases", title="Officer Cases")+
+  facet_grid(cols=vars(prison))
+p3 <-GA_facilities %>%
+  ggplot(aes(y=inmate_deaths_prop, x=NEVER, color=prison)) + geom_point() + 
+  labs(x="Inmate Population", y= "Inmate Deaths", title="Inmate Deaths") +
+  facet_grid(cols=vars(prison))
+p4 <-GA_facilities %>%
+  ggplot(aes(y=officer_deaths_prop, x=NEVER, color=prison)) + geom_point() + 
+  labs(x="Inmate Population", y= "Officer Deaths", title="Officer Deaths") +
+  facet_grid(cols=vars(prison))
+p5 <-GA_facilities %>%
+  ggplot(aes(y=inmate_lethality, x=NEVER, color=prison)) + geom_point() + 
+  labs(x="Inmate Population", y= "Inmate Deaths", title="Inmate Deaths") +
+  facet_grid(cols=vars(prison))
+p6 <-GA_facilities %>%
+  ggplot(aes(y=officer_lethality, x=NEVER, color=prison)) + geom_point() + 
+  labs(x="Inmate Population", y= "Officer Deaths", title="Officer Deaths") +
+  facet_grid(cols=vars(prison))
+
+grid.arrange(p1, p2, p3, p4, p5, p6, ncol=2)
+```
+
+```{r}
+p1 <- GA_facilities %>%
+  ggplot(aes(y=inmate_cases_prop, x=ALWAYS, color=prison)) + geom_point() + 
+  labs(x="ALWAYS", y= "Inmate Cases", title="Inmate Cases") +
+  facet_grid(cols=vars(prison))
+p2 <-GA_facilities %>%
+  ggplot(aes(y=officer_cases_prop, x=ALWAYS, color=prison)) + geom_point() + 
+  labs(x="ALWAYS", y= "Officer Cases", title="Officer Cases")+
+  facet_grid(cols=vars(prison))
+p3 <-GA_facilities %>%
+  ggplot(aes(y=inmate_deaths_prop, x=ALWAYS, color=prison)) + geom_point() + 
+  labs(x="ALWAYS", y= "Inmate Deaths", title="Inmate Deaths") +
+  facet_grid(cols=vars(prison))
+p4 <-GA_facilities %>%
+  ggplot(aes(y=inmate_lethality, x=ALWAYS, color=prison)) + geom_point() + 
+  labs(x="ALWAYS", y= "Inmate Deaths", title="Inmate Deaths") +
+  facet_grid(cols=vars(prison))
+
+grid.arrange(p1, p2, p3, p4, ncol=2)
+```
+
+```{r}
+p1 <- GA_facilities %>%
+  ggplot(aes(y=inmate_cases_prop, x=NEVER, color=prison)) + geom_point() + 
+  labs(x="NEVER", y= "Inmate Cases", title="Inmate Cases") +
+  facet_grid(cols=vars(prison))
+p2 <-GA_facilities %>%
+  ggplot(aes(y=officer_cases_prop, x=NEVER, color=prison)) + geom_point() + 
+  labs(x="NEVER", y= "Officer Cases", title="Officer Cases")+
+  facet_grid(cols=vars(prison))
+p3 <-GA_facilities %>%
+  ggplot(aes(y=inmate_deaths_prop, x=NEVER, color=prison)) + geom_point() + 
+  labs(x="NEVER", y= "Inmate Deaths", title="Inmate Deaths") +
+  facet_grid(cols=vars(prison))
+p4 <-GA_facilities %>%
+  ggplot(aes(y=inmate_lethality, x=NEVER, color=prison)) + geom_point() + 
+  labs(x="NEVER", y= "Inmate Mortality", title="Officer Deaths") +
+  facet_grid(cols=vars(prison))
+
+grid.arrange(p1, p2, p3, p4, ncol=2)
+```
+
+```{r}
+p1 <- GA_facilities %>%
+  ggplot(aes(y=inmate_cases_prop, x=mask_ratio, color=prison)) + geom_point() + 
+  labs(x="Mask Ratio", y= "Inmate Cases", title="Inmate Cases") +
+  facet_grid(cols=vars(prison))
+p2 <-GA_facilities %>%
+  ggplot(aes(y=officer_cases_prop, x=mask_ratio, color=prison)) + geom_point() + 
+  labs(x="Mask Ratio", y= "Officer Cases", title="Officer Cases")+
+  facet_grid(cols=vars(prison))
+p3 <-GA_facilities %>%
+  ggplot(aes(y=inmate_deaths_prop, x=mask_ratio, color=prison)) + geom_point() + 
+  labs(x="Mask Ratio", y= "Inmate Deaths", title="Inmate Deaths") +
+  facet_grid(cols=vars(prison))
+p4 <-GA_facilities %>%
+  ggplot(aes(y=inmate_lethality, x=mask_ratio, color=prison)) + geom_point() + 
+  labs(x="Mask Ratio", y= "Inmate Mortality", title="Inmate Mortality") +
+  facet_grid(cols=vars(prison))
+
+grid.arrange(p1, p2, p3, p4, ncol=2)
+```
+
+```{r}
+p1 <- GA_facilities %>%
+  ggplot(aes(y=inmate_cases_prop, x=NEVER+RARELY, color=prison)) + geom_point() + 
+  labs(x="NEVER+RARELY", y= "Inmate Cases", title="Inmate Cases") +
+  facet_grid(cols=vars(prison))
+p2 <-GA_facilities %>%
+  ggplot(aes(y=officer_cases_prop, x=NEVER+RARELY, color=prison)) + geom_point() + 
+  labs(x="NEVER+RARELY", y= "Officer Cases", title="Officer Cases")+
+  facet_grid(cols=vars(prison))
+p3 <-GA_facilities %>%
+  ggplot(aes(y=inmate_deaths_prop, x=NEVER+RARELY, color=prison)) + geom_point() + 
+  labs(x="NEVER+RARELY", y= "Inmate Deaths", title="Inmate Deaths") +
+  facet_grid(cols=vars(prison))
+p4 <-GA_facilities %>%
+  ggplot(aes(y=inmate_lethality, x=NEVER+RARELY, color=prison)) + geom_point() + 
+  labs(x="NEVER+RARELY", y= "Inmate Mortality", title="Inmate Mortality") +
+  facet_grid(cols=vars(prison))
+
+grid.arrange(p1, p2, p3, p4, ncol=2)
+```
+```{r}
+group_by(GA_facilities, facility_county) %>%
+  summarise(count= n())
+```
+
+```{r}
+GA_facilities <- GA_facilities %>%
+  mutate (metro = case_when(
+  facility_county == "Fulton"~ 1,
+  facility_county == "Cobb"~ 1,
+  facility_county == "Gwinnett"~ 1,
+  facility_county == "Clayton"~ 1,
+  facility_county == "DeKalb"~ 1,
+  TRUE ~ 0))
+group_by(GA_facilities, metro) %>%
+  summarise(count= n())
+```
+
+
+```{r}
+p1 <- GA_facilities %>%
+  ggplot(aes(y=inmate_cases_prop, x=NEVER, color=metro)) + geom_point() + 
+  labs(x="NEVER", y= "Inmate Cases", title="Inmate Cases") +
+  facet_grid(cols=vars(metro))
+p2 <-GA_facilities %>%
+  ggplot(aes(y=officer_cases_prop, x=NEVER, color=metro)) + geom_point() + 
+  labs(x="NEVER", y= "Officer Cases", title="Officer Cases")+
+  facet_grid(cols=vars(metro))
+p3 <-GA_facilities %>%
+  ggplot(aes(y=inmate_deaths_prop, x=NEVER, color=metro)) + geom_point() + 
+  labs(x="NEVER", y= "Inmate Deaths", title="Inmate Deaths") +
+  facet_grid(cols=vars(metro))
+p4 <-GA_facilities %>%
+  ggplot(aes(y=inmate_lethality, x=NEVER, color=metro)) + geom_point() + 
+  labs(x="NEVER", y= "Inmate Mortality", title="INMATE Mortality") +
+  facet_grid(cols=vars(metro))
+
+grid.arrange(p1, p2, p3, p4, ncol=2)
+```
+
+```{r}
+p1 <- GA_facilities %>%
+  ggplot(aes(y=inmate_cases_prop, x=latest_inmate_population, color=metro)) + geom_point() + 
+  labs(x="Inmate Population", y= "Inmate Cases", title="Inmate Cases") +
+  facet_grid(cols=vars(metro))
+p2 <-GA_facilities %>%
+  ggplot(aes(y=officer_cases_prop, x=latest_inmate_population, color=metro)) + geom_point() + 
+  labs(x="Inmate Population", y= "Officer Cases", title="Officer Cases")+
+  facet_grid(cols=vars(metro))
+p3 <-GA_facilities %>%
+  ggplot(aes(y=inmate_deaths_prop, x=latest_inmate_population, color=metro)) + geom_point() + 
+  labs(x="Inmate Population", y= "Inmate Deaths", title="Inmate Deaths") +
+  facet_grid(cols=vars(metro))
+p4 <-GA_facilities %>%
+  ggplot(aes(y=inmate_lethality, x=latest_inmate_population, color=metro)) + geom_point() + 
+  labs(x="Inmate Population", y= "Inmate Mortality", title="INMATE Mortality") +
+  facet_grid(cols=vars(metro))
+
+grid.arrange(p1, p2, p3, p4, ncol=2)
+```
+
+
+
+
+
+
+
+

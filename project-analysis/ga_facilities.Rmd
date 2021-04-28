@@ -1,0 +1,698 @@
+---
+title: "GA Only EDA"
+author: "Sarah Tillman"
+date: "4/27/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# library & packages
+```{r load libraries, error=FALSE, message=FALSE}
+library(plyr)
+library(magrittr)
+library(readr)
+library(tidyverse)
+library(gridExtra)
+
+# linear model w/ g prior function
+lm.gprior<-function(y,X,g=dim(X)[1],nu0=1,s20=try(summary(lm(y~-1+X))$sigma^2,silent=TRUE),S=1000)
+{
+  
+  n<-dim(X)[1] ; p<-dim(X)[2]
+  Hg<- (g/(g+1)) * X%*%solve(t(X)%*%X)%*%t(X)
+  SSRg<- t(y)%*%( diag(1,nrow=n)  - Hg ) %*%y
+  
+  s2<-1/rgamma(S, (nu0+n)/2, (nu0*s20+SSRg)/2 )
+  
+  Vb<- g*solve(t(X)%*%X)/(g+1)
+  Eb<- Vb%*%t(X)%*%y
+  
+  E<-matrix(rnorm(S*p,0,sqrt(s2)),S,p)
+  beta<-t(  t(E%*%chol(Vb)) +c(Eb))
+  
+  list(beta=beta,s2=s2)                                
+}
+```
+
+# Cases & Deaths Data
+```{r load data, message=FALSE}
+mask_use <- read_csv(file="../mask-use/mask-use-by-county.csv")
+cases_total <- read_csv(file="../us-counties.csv")
+cases_recent <- read_csv(file="../us-counties-recent.csv")
+prison_facilities <- read_csv(file="../prisons/facilities.csv")
+systems <- read.csv(file="../prisons/systems.csv")
+```
+
+```{r adding facility type variables}
+prison_facilities <- prison_facilities %>%
+  filter(facility_type != "Reservation jail" & facility_type != "U.S. Marshalls")
+
+facility_group <- rep(0, nrow(prison_facilities))
+prison_facilities["facility_group"] <- facility_group
+prison <- rep(0, nrow(prison_facilities))
+prison_facilities["prison"] <- prison
+
+prison_facilities <- prison_facilities %>%
+  mutate (facility_group = case_when(
+  facility_type == "Federal halfway house"~ 2,
+  facility_type == "Federal prison"~ 2,
+  facility_type == "State facility"~ 1,
+  facility_type == "State halfway house"~ 1,
+  facility_type == "State juvenile detention"~ 1,
+  facility_type == "State prison"~ 1,
+  facility_type == "State rehabilitation center"~ 1,
+  facility_type == "State work camp"~ 1,
+  TRUE ~ 0)) %>%
+  mutate(prison = case_when(
+    facility_type == "State prison"~ 1,
+    facility_type == "Federal prison"~ 1,
+    TRUE ~ 0))
+
+group_by(prison_facilities, facility_group, facility_type) %>%
+  summarise(count = n())
+```
+
+```{r dropping unimportant data & NA's}
+# drop unimportant columns
+ga_facilities <- prison_facilities %>%
+  select(-c(nyt_id, facility_lng, facility_lat, max_inmate_population_2020, note, facility_city,
+            total_officer_deaths, facility_name)) %>%
+  filter(facility_state == "Georgia")
+
+ga_facilities <- drop_na(ga_facilities)
+
+group_by(ga_facilities, facility_type) %>%
+  summarise(count = n())
+```
+
+```{r adding metro variable}
+ga_facilities["metro"] <- rep(0, nrow(ga_facilities))
+
+ga_facilities <- ga_facilities %>%
+  mutate (metro = case_when(
+  facility_county == "Fulton"~ 1,
+  facility_county == "Cobb"~ 1,
+  facility_county == "Gwinnett"~ 1,
+  facility_county == "Clayton"~ 1,
+  facility_county == "DeKalb"~ 1,
+  facility_county == "Coweta"~ 1,
+  facility_county == "Fayette"~ 1,
+  facility_county == "Henry"~ 1,
+  facility_county == "Douglas"~ 1,
+  TRUE ~ 0))
+group_by(ga_facilities, metro) %>%
+  summarise(count= n())
+
+colnames(ga_facilities)[3] <- "fips"
+colnames(mask_use)[1] <- "fips"
+ga_facilities <- inner_join(ga_facilities, mask_use, by = "fips")
+```
+
+```{r adding rate variables}
+ga_facilities["inmate_mortality"] <- ga_facilities$total_inmate_deaths / ga_facilities$total_inmate_cases * 100
+ga_facilities["inmate_infection_rate"] <- ga_facilities$total_inmate_cases / ga_facilities$latest_inmate_population * 100
+ga_facilities["officer_infection_rate"] <- ga_facilities$total_officer_cases / ga_facilities$latest_inmate_population * 100
+
+ga_facilities[is.na(ga_facilities)] <- 0
+```
+
+```{r response variables interactions}
+p1 <- ga_facilities %>%
+  ggplot(aes(x=total_inmate_cases, y=total_inmate_deaths, color=metro)) + geom_point() + 
+  labs(x="Total Inmate Cases", y= "Total Inmate Deaths", title="Inmate Cases v. Deaths") +
+  facet_grid(cols=vars(metro))
+p2 <- ga_facilities %>%
+  ggplot(aes(x=total_inmate_cases, y=total_inmate_deaths, color=prison)) + geom_point() + 
+  labs(x="Total Inmate Cases", y= "Total Inmate Deaths", title="Inmate Cases v. Deaths") +
+  facet_grid(cols=vars(prison))
+p3 <- ga_facilities %>%
+  ggplot(aes(x=total_inmate_cases, y=total_inmate_deaths, color=facility_group)) + geom_point() + 
+  labs(x="Total Inmate Cases", y= "Total Inmate Deaths", title="Inmate Cases v. Deaths") +
+  facet_grid(cols=vars(facility_group))
+
+grid.arrange(p1, p2, p3, ncol=1)
+
+p1 <- ga_facilities %>%
+  ggplot(aes(x=total_inmate_cases, y=total_officer_cases, color=metro)) + geom_point() + 
+  labs(x="Total Inmate Cases", y= "Total Officer Cases", title="Inmate Cases v. Officer Cases") +
+  facet_grid(cols=vars(metro))
+p2 <- ga_facilities %>%
+  ggplot(aes(x=total_inmate_cases, y=total_officer_cases, color=prison)) + geom_point() + 
+  labs(x="Total Inmate Cases", y= "Total Officer Cases", title="Inmate Cases v. OFficer Cases") +
+  facet_grid(cols=vars(prison))
+p3 <- ga_facilities %>%
+  ggplot(aes(x=total_inmate_cases, y=total_officer_cases, color=facility_group)) + geom_point() + 
+  labs(x="Total Inmate Cases", y= "Total Officer Cases", title="Inmate Cases v. Officer Cases") +
+  facet_grid(cols=vars(facility_group))
+
+grid.arrange(p1, p2, p3, ncol=1)
+
+p1 <- ga_facilities %>%
+  ggplot(aes(x=total_inmate_cases, y=latest_inmate_population, color=metro)) + geom_point() + 
+  labs(x="Total Inmate Cases", y= "Latest Inmate Population", title="Inmate Cases v. Inmate Population") +
+  facet_grid(cols=vars(metro))
+p2 <- ga_facilities %>%
+  ggplot(aes(x=total_inmate_cases, y=latest_inmate_population, color=prison)) + geom_point() + 
+  labs(x="Total Inmate Cases", y= "Latest Inmate Population", title="Inmate Cases v. Inmate Population") +
+  facet_grid(cols=vars(prison))
+p3 <- ga_facilities %>%
+  ggplot(aes(x=total_inmate_cases, y=latest_inmate_population, color=facility_group)) + geom_point() + 
+  labs(x="Total Inmate Cases", y= "Latest Inmate Population", title="Inmate Cases v. Inmate Population") +
+  facet_grid(cols=vars(facility_group))
+
+grid.arrange(p1, p2, p3, ncol=1)
+
+p1 <- ga_facilities %>%
+  ggplot(aes(x=total_inmate_deaths, y=latest_inmate_population, color=metro)) + geom_point() + 
+  labs(x="Total Inmate Deaths", y= "Latest Inmate Population", title="Inmate Deaths v. Inmate Population") +
+  facet_grid(cols=vars(metro))
+p2 <- ga_facilities %>%
+  ggplot(aes(x=total_inmate_deaths, y=latest_inmate_population, color=prison)) + geom_point() + 
+  labs(x="Total Inmate Deaths", y= "Latest Inmate Population", title="Inmate Deaths v. Inmate Population") +
+  facet_grid(cols=vars(prison))
+p3 <- ga_facilities %>%
+  ggplot(aes(x=total_inmate_deaths, y=latest_inmate_population, color=facility_group)) + geom_point() + 
+  labs(x="Total Inmate Deaths", y= "Latest Inmate Population", title="Inmate Deaths v. Inmate Population") +
+  facet_grid(cols=vars(facility_group))
+
+grid.arrange(p1, p2, p3, ncol=1)
+
+p1 <- ga_facilities %>%
+  ggplot(aes(x=total_officer_cases, y=latest_inmate_population, color=metro)) + geom_point() + 
+  labs(x="otal Officer Cases", y= "Latest Inmate Population", title="Officer Cases v. Inmate Population") +
+  facet_grid(cols=vars(metro))
+p2 <- ga_facilities %>%
+  ggplot(aes(x=total_officer_cases, y=latest_inmate_population, color=prison)) + geom_point() + 
+  labs(x="otal Officer Cases", y= "Latest Inmate Population", title="Officer Cases v. Inmate Population") +
+  facet_grid(cols=vars(prison))
+p3 <- ga_facilities %>%
+  ggplot(aes(x=total_officer_cases, y=latest_inmate_population, color=facility_group)) + geom_point() + 
+  labs(x="Total Officer Cases", y= "Latest Inmate Population", title="Officer Cases v. Inmate Population") +
+  facet_grid(cols=vars(facility_group))
+
+grid.arrange(p1, p2, p3, ncol=1)
+```
+
+```{r rate variable interactions}
+p1 <- ga_facilities %>%
+  ggplot(aes(x=total_officer_cases, y=inmate_mortality, color=metro)) + geom_point() + 
+  labs(x="Total Officer Cases", y= "Inmate Mortality Rate", title="Officer Cases v. Inmate Mortality") +
+  facet_grid(cols=vars(metro))
+p2 <- ga_facilities %>%
+  ggplot(aes(x=total_officer_cases, y=inmate_mortality, color=prison)) + geom_point() + 
+  labs(x="Total Officer Cases", y= "Inmate Mortality Rate", title="Officer Cases v. Inmate Mortality") +
+  facet_grid(cols=vars(prison))
+p3 <- ga_facilities %>%
+  ggplot(aes(x=total_officer_cases, y=inmate_mortality, color=facility_group)) + geom_point() + 
+  labs(x="Total Officer Cases", y= "Inmate Mortality Rate", title="Officer Cases v. Inmate Mortality") +
+  facet_grid(cols=vars(facility_group))
+
+grid.arrange(p1, p2, p3, ncol=1)
+
+p1 <- ga_facilities %>%
+  ggplot(aes(x=latest_inmate_population, y=inmate_mortality, color=metro)) + geom_point() + 
+  labs(x="Inmate Population", y= "Inmate Mortality Rate", title="Inmate Mortality v. Inmate Population") +
+  facet_grid(cols=vars(metro))
+p2 <- ga_facilities %>%
+  ggplot(aes(x=latest_inmate_population, y=inmate_mortality, color=prison)) + geom_point() + 
+  labs(x="Inmate Population", y= "Inmate Mortality Rate", title="Inmate Mortality v. Inmate Population") +
+  facet_grid(cols=vars(prison))
+p3 <- ga_facilities %>%
+  ggplot(aes(x=latest_inmate_population, y=inmate_mortality, color=facility_group)) + geom_point() + 
+  labs(x="Inmate Population", y= "Inmate Mortality Rate", title="Inmate Mortality v. Inmate Population") +
+  facet_grid(cols=vars(facility_group))
+
+grid.arrange(p1, p2, p3, ncol=1)
+
+p1 <- ga_facilities %>%
+  ggplot(aes(x=total_inmate_cases, y=inmate_mortality, color=metro)) + geom_point() + 
+  labs(x="Inmate Cases", y= "Inmate Mortality Rate", title="Inmate Mortality v. Inmate Cases") +
+  facet_grid(cols=vars(metro))
+p2 <- ga_facilities %>%
+  ggplot(aes(x=total_inmate_cases, y=inmate_mortality, color=prison)) + geom_point() + 
+  labs(x="Inmate Cases", y= "Inmate Mortality Rate", title="Inmate Mortality v. Inmate Cases") +
+  facet_grid(cols=vars(prison))
+p3 <- ga_facilities %>%
+  ggplot(aes(x=total_inmate_cases, y=inmate_mortality, color=facility_group)) + geom_point() + 
+  labs(x="Inmate Cases", y= "Inmate Mortality Rate", title="Inmate Mortality v. Inmate Cases") +
+  facet_grid(cols=vars(facility_group))
+
+grid.arrange(p1, p2, p3, ncol=1)
+
+p1 <- ga_facilities %>%
+  ggplot(aes(x=total_inmate_cases, y=inmate_infection_rate, color=metro)) + geom_point() + 
+  labs(x="Inmate Cases", y= "Inmate Infection Rate", title="Inmate Infection Rate v. Inmate Cases") +
+  facet_grid(cols=vars(metro))
+p2 <- ga_facilities %>%
+  ggplot(aes(x=total_inmate_cases, y=inmate_infection_rate, color=prison)) + geom_point() + 
+  labs(x="Inmate Cases", y= "Inmate Infection Rate", title="Inmate Infection Rate v. Inmate Cases") +
+  facet_grid(cols=vars(prison))
+p3 <- ga_facilities %>%
+  ggplot(aes(x=total_inmate_cases, y=inmate_infection_rate, color=facility_group)) + geom_point() + 
+  labs(x="Inmate Cases", y= "Inmate Infection Rate", title="Inmate Infection Rate v. Inmate Cases") +
+  facet_grid(cols=vars(facility_group))
+
+grid.arrange(p1, p2, p3, ncol=1)
+
+p1 <- ga_facilities %>%
+  ggplot(aes(x=total_officer_cases, y=inmate_infection_rate, color=metro)) + geom_point() + 
+  labs(x="Officer Cases", y= "Inmate Infection Rate", title="Inmate Infection Rate v. IOfficer Cases") +
+  facet_grid(cols=vars(metro))
+p2 <- ga_facilities %>%
+  ggplot(aes(x=total_officer_cases, y=inmate_infection_rate, color=prison)) + geom_point() + 
+  labs(x="Officer Cases", y= "Inmate Infection Rate", title="Inmate Infection Rate v. Officer Cases") +
+  facet_grid(cols=vars(prison))
+p3 <- ga_facilities %>%
+  ggplot(aes(x=total_officer_cases, y=inmate_infection_rate, color=facility_group)) + geom_point() + 
+  labs(x="Officer Cases", y= "Inmate Infection Rate", title="Inmate Infection Rate v. Officer Cases") +
+  facet_grid(cols=vars(facility_group))
+
+grid.arrange(p1, p2, p3, ncol=1)
+
+p1 <- ga_facilities %>%
+  ggplot(aes(x=total_officer_cases, y=officer_infection_rate, color=metro)) + geom_point() + 
+  labs(x="Officer Cases", y= "Officer Infection Rate", title="Officer Infection Rate v. Officer Cases") +
+  facet_grid(cols=vars(metro))
+p2 <- ga_facilities %>%
+  ggplot(aes(x=total_officer_cases, y=officer_infection_rate, color=prison)) + geom_point() + 
+  labs(x="Officer Cases", y= "Officer Infection Rate", title="Officer Infection Rate v. Officer Cases") +
+  facet_grid(cols=vars(prison))
+p3 <- ga_facilities %>%
+  ggplot(aes(x=total_officer_cases, y=officer_infection_rate, color=facility_group)) + geom_point() + 
+  labs(x="Officer Cases", y= "Officer Infection Rate", title="Officer Infection Rate v. Officer Cases") +
+  facet_grid(cols=vars(facility_group))
+
+grid.arrange(p1, p2, p3, ncol=1)
+
+p1 <- ga_facilities %>%
+  ggplot(aes(x=total_inmate_cases, y=officer_infection_rate, color=metro)) + geom_point() + 
+  labs(x="Inmate Cases", y= "Officer Infection Rate", title="Officer Infection Rate v. Inmate Cases") +
+  facet_grid(cols=vars(metro))
+p2 <- ga_facilities %>%
+  ggplot(aes(x=total_inmate_cases, y=officer_infection_rate, color=prison)) + geom_point() + 
+  labs(x="Inmate Cases", y= "Officer Infection Rate", title="Officer Infection Rate v. Inmate Cases") +
+  facet_grid(cols=vars(prison))
+p3 <- ga_facilities %>%
+  ggplot(aes(x=total_inmate_cases, y=officer_infection_rate, color=facility_group)) + geom_point() + 
+  labs(x="Inmate Cases", y= "Officer Infection Rate", title="Officer Infection Rate v. Inmate Cases") +
+  facet_grid(cols=vars(facility_group))
+
+grid.arrange(p1, p2, p3, ncol=1)
+```
+
+```{r local mask usage & facility infection/mortality rates}
+p1 <- ga_facilities %>%
+  ggplot(aes(x=NEVER, y=officer_infection_rate, color=metro)) + geom_point() + 
+  labs(x="NEVER", y= "Officer Infection Rate", title="NEVER v. Officer Infection Rate") +
+  facet_grid(cols=vars(metro))
+p2 <- ga_facilities %>%
+  ggplot(aes(x=NEVER, y=officer_infection_rate, color=prison)) + geom_point() + 
+  labs(x="NEVER", y= "Officer Infection Rate", title="NEVER v. Officer Infection Rate") +
+  facet_grid(cols=vars(prison))
+p3 <- ga_facilities %>%
+  ggplot(aes(x=NEVER, y=inmate_infection_rate, color=metro)) + geom_point() + 
+  labs(x="NEVER", y= "Inmate Infection Rate", title="NEVER v. Inmate Infection Rate") +
+  facet_grid(cols=vars(metro))
+p4 <- ga_facilities %>%
+  ggplot(aes(x=NEVER, y=inmate_infection_rate, color=prison)) + geom_point() + 
+  labs(x="NEVER", y= "Inmate Infection Rate", title="NEVER v. Inmate Infection Rate") +
+  facet_grid(cols=vars(prison))
+p5 <- ga_facilities %>%
+  ggplot(aes(x=NEVER, y=inmate_mortality, color=metro)) + geom_point() + 
+  labs(x="NEVER", y= "Inmate Mortality Rate", title="NEVER v. Inmate Mortality Rate") +
+  facet_grid(cols=vars(metro))
+p6 <- ga_facilities %>%
+  ggplot(aes(x=NEVER, y=inmate_mortality, color=prison)) + geom_point() + 
+  labs(x="NEVER", y= "Inmate Mortality Rate", title="NEVER v. Inmate Mortality Rate") +
+  facet_grid(cols=vars(prison))
+
+grid.arrange(p1, p2, p3, p4, p5, p6, ncol=2)
+
+p1 <- ga_facilities %>%
+  ggplot(aes(x=RARELY, y=officer_infection_rate, color=metro)) + geom_point() + 
+  labs(x="RARELY", y= "Officer Infection Rate", title="RARELY v. Officer Infection Rate") +
+  facet_grid(cols=vars(metro))
+p2 <- ga_facilities %>%
+  ggplot(aes(x=RARELY, y=officer_infection_rate, color=prison)) + geom_point() + 
+  labs(x="RARELY", y= "Officer Infection Rate", title="RARELY v. Officer Infection Rate") +
+  facet_grid(cols=vars(prison))
+p3 <- ga_facilities %>%
+  ggplot(aes(x=RARELY, y=inmate_infection_rate, color=metro)) + geom_point() + 
+  labs(x="RARELY", y= "Inmate Infection Rate", title="RARELY v. Inmate Infection Rate") +
+  facet_grid(cols=vars(metro))
+p4 <- ga_facilities %>%
+  ggplot(aes(x=RARELY, y=inmate_infection_rate, color=prison)) + geom_point() + 
+  labs(x="RARELY", y= "Inmate Infection Rate", title="RARELY v. Inmate Infection Rate") +
+  facet_grid(cols=vars(prison))
+p5 <- ga_facilities %>%
+  ggplot(aes(x=RARELY, y=inmate_mortality, color=metro)) + geom_point() + 
+  labs(x="RARELY", y= "Inmate Mortality Rate", title="RARELY v. Inmate Mortality Rate") +
+  facet_grid(cols=vars(metro))
+p6 <- ga_facilities %>%
+  ggplot(aes(x=RARELY, y=inmate_mortality, color=prison)) + geom_point() + 
+  labs(x="RARELY", y= "Inmate Mortality Rate", title="RARELY v. Inmate Mortality Rate") +
+  facet_grid(cols=vars(prison))
+
+grid.arrange(p1, p2, p3, p4, p5, p6, ncol=2)
+
+p1 <- ga_facilities %>%
+  ggplot(aes(x=SOMETIMES, y=officer_infection_rate, color=metro)) + geom_point() + 
+  labs(x="SOMETIMES", y= "Officer Infection Rate", title="SOMETIMES v. Officer Infection Rate") +
+  facet_grid(cols=vars(metro))
+p2 <- ga_facilities %>%
+  ggplot(aes(x=SOMETIMES, y=officer_infection_rate, color=prison)) + geom_point() + 
+  labs(x="SOMETIMES", y= "Officer Infection Rate", title="SOMETIMES v. Officer Infection Rate") +
+  facet_grid(cols=vars(prison))
+p3 <- ga_facilities %>%
+  ggplot(aes(x=SOMETIMES, y=inmate_infection_rate, color=metro)) + geom_point() + 
+  labs(x="SOMETIMES", y= "Inmate Infection Rate", title="SOMETIMES v. Inmate Infection Rate") +
+  facet_grid(cols=vars(metro))
+p4 <- ga_facilities %>%
+  ggplot(aes(x=SOMETIMES, y=inmate_infection_rate, color=prison)) + geom_point() + 
+  labs(x="SOMETIMES", y= "Inmate Infection Rate", title="SOMETIMES v. Inmate Infection Rate") +
+  facet_grid(cols=vars(prison))
+p5 <- ga_facilities %>%
+  ggplot(aes(x=SOMETIMES, y=inmate_mortality, color=metro)) + geom_point() + 
+  labs(x="SOMETIMES", y= "Inmate Mortality Rate", title="SOMETIMES v. Inmate Mortality Rate") +
+  facet_grid(cols=vars(metro))
+p6 <- ga_facilities %>%
+  ggplot(aes(x=SOMETIMES, y=inmate_mortality, color=prison)) + geom_point() + 
+  labs(x="SOMETIMES", y= "Inmate Mortality Rate", title="SOMETIMES v. Inmate Mortality Rate") +
+  facet_grid(cols=vars(prison))
+
+grid.arrange(p1, p2, p3, p4, p5, p6, ncol=2)
+
+p1 <- ga_facilities %>%
+  ggplot(aes(x=FREQUENTLY, y=officer_infection_rate, color=metro)) + geom_point() + 
+  labs(x="FREQUENTLY", y= "Officer Infection Rate", title="FREQUENTLY v. Officer Infection Rate") +
+  facet_grid(cols=vars(metro))
+p2 <- ga_facilities %>%
+  ggplot(aes(x=FREQUENTLY, y=officer_infection_rate, color=prison)) + geom_point() + 
+  labs(x="FREQUENTLY", y= "Officer Infection Rate", title="FREQUENTLY v. Officer Infection Rate") +
+  facet_grid(cols=vars(prison))
+p3 <- ga_facilities %>%
+  ggplot(aes(x=FREQUENTLY, y=inmate_infection_rate, color=metro)) + geom_point() + 
+  labs(x="FREQUENTLY", y= "Inmate Infection Rate", title="FREQUENTLY v. Inmate Infection Rate") +
+  facet_grid(cols=vars(metro))
+p4 <- ga_facilities %>%
+  ggplot(aes(x=FREQUENTLY, y=inmate_infection_rate, color=prison)) + geom_point() + 
+  labs(x="FREQUENTLY", y= "Inmate Infection Rate", title="FREQUENTLY v. Inmate Infection Rate") +
+  facet_grid(cols=vars(prison))
+p5 <- ga_facilities %>%
+  ggplot(aes(x=FREQUENTLY, y=inmate_mortality, color=metro)) + geom_point() + 
+  labs(x="FREQUENTLY", y= "Inmate Mortality Rate", title="FREQUENTLY v. Inmate Mortality Rate") +
+  facet_grid(cols=vars(metro))
+p6 <- ga_facilities %>%
+  ggplot(aes(x=FREQUENTLY, y=inmate_mortality, color=prison)) + geom_point() + 
+  labs(x="FREQUENTLY", y= "Inmate Mortality Rate", title="FREQUENTLY v. Inmate Mortality Rate") +
+  facet_grid(cols=vars(prison))
+
+grid.arrange(p1, p2, p3, p4, p5, p6, ncol=2)
+
+p1 <- ga_facilities %>%
+  ggplot(aes(x=ALWAYS, y=officer_infection_rate, color=metro)) + geom_point() + 
+  labs(x="ALWAYS", y= "Officer Infection Rate", title="ALWAYS v. Officer Infection Rate") +
+  facet_grid(cols=vars(metro))
+p2 <- ga_facilities %>%
+  ggplot(aes(x=ALWAYS, y=officer_infection_rate, color=prison)) + geom_point() + 
+  labs(x="ALWAYS", y= "Officer Infection Rate", title="ALWAYS v. Officer Infection Rate") +
+  facet_grid(cols=vars(prison))
+p3 <- ga_facilities %>%
+  ggplot(aes(x=ALWAYS, y=inmate_infection_rate, color=metro)) + geom_point() + 
+  labs(x="ALWAYS", y= "Inmate Infection Rate", title="ALWAYS v. Inmate Infection Rate") +
+  facet_grid(cols=vars(metro))
+p4 <- ga_facilities %>%
+  ggplot(aes(x=ALWAYS, y=inmate_infection_rate, color=prison)) + geom_point() + 
+  labs(x="ALWAYS", y= "Inmate Infection Rate", title="ALWAYS v. Inmate Infection Rate") +
+  facet_grid(cols=vars(prison))
+p5 <- ga_facilities %>%
+  ggplot(aes(x=ALWAYS, y=inmate_mortality, color=metro)) + geom_point() + 
+  labs(x="ALWAYS", y= "Inmate Mortality Rate", title="ALWAYS v. Inmate Mortality Rate") +
+  facet_grid(cols=vars(metro))
+p6 <- ga_facilities %>%
+  ggplot(aes(x=ALWAYS, y=inmate_mortality, color=prison)) + geom_point() + 
+  labs(x="ALWAYS", y= "Inmate Mortality Rate", title="ALWAYS v. Inmate Mortality Rate") +
+  facet_grid(cols=vars(prison))
+
+grid.arrange(p1, p2, p3, p4, p5, p6, ncol=2)
+
+p1 <- ga_facilities %>%
+  ggplot(aes(x=NEVER+RARELY, y=officer_infection_rate, color=metro)) + geom_point() + 
+  labs(x="NEVER+RARELY", y= "Officer Infection Rate", title="NEVER+RARELY v. Officer Infection Rate") +
+  facet_grid(cols=vars(metro))
+p2 <- ga_facilities %>%
+  ggplot(aes(x=NEVER+RARELY, y=officer_infection_rate, color=prison)) + geom_point() + 
+  labs(x="NEVER+RARELY", y= "Officer Infection Rate", title="NEVER+RARELY v. Officer Infection Rate") +
+  facet_grid(cols=vars(prison))
+p3 <- ga_facilities %>%
+  ggplot(aes(x=NEVER+RARELY, y=inmate_infection_rate, color=metro)) + geom_point() + 
+  labs(x="NEVER+RARELY", y= "Inmate Infection Rate", title="NEVER+RARELY v. Inmate Infection Rate") +
+  facet_grid(cols=vars(metro))
+p4 <- ga_facilities %>%
+  ggplot(aes(x=NEVER+RARELY, y=inmate_infection_rate, color=prison)) + geom_point() + 
+  labs(x="NEVER+RARELY", y= "Inmate Infection Rate", title="NEVER+RARELY v. Inmate Infection Rate") +
+  facet_grid(cols=vars(prison))
+p5 <- ga_facilities %>%
+  ggplot(aes(x=NEVER+RARELY, y=inmate_mortality, color=metro)) + geom_point() + 
+  labs(x="NEVER+RARELY", y= "Inmate Mortality Rate", title="NEVER+RARELY v. Inmate Mortality Rate") +
+  facet_grid(cols=vars(metro))
+p6 <- ga_facilities %>%
+  ggplot(aes(x=RARELY, y=inmate_mortality, color=prison)) + geom_point() + 
+  labs(x="NEVER+RARELY", y= "Inmate Mortality Rate", title="NEVER+RARELY v. Inmate Mortality Rate") +
+  facet_grid(cols=vars(prison))
+
+grid.arrange(p1, p2, p3, p4, p5, p6, ncol=2)
+```
+
+# Regression Modeling
+```{r set up full models}
+# inmate mortality model
+y.im <- inmate.mortality <- ga_facilities$inmate_mortality
+X.im.full <- select(ga_facilities, -c("facility_type", "facility_county", "fips", "facility_state", "facility_group",
+                                      "inmate_mortality", "total_inmate_deaths"))
+# inmate infection rate model
+y.iir <- inmate.infections <- ga_facilities$inmate_infection_rate
+X.iir.full <- select(ga_facilities, -c("facility_type", "facility_county", "fips", "facility_state", "facility_group",
+                                       "inmate_infection_rate", "total_inmate_deaths"))
+```
+```{r inmate mortality full linear models w g prior}
+# inmate mortality model w/ g prior
+X.im.full["intercept"] <- rep(1, nrow(X.im.full))
+p <- ncol(X.im.full)
+X <- as.matrix(X.im.full)
+im.model.full <-lm.gprior(y.im,X,g=dim(X)[1],nu0=1,S=10000)
+Beta.post <- im.model.full$beta
+# Posterior mean + 90% Credible Interval
+post.data <- matrix(1:(p*3), nrow=p, dimnames = list(colnames(X.im.full), c("Posterior.Mean", "CI.Lower", "CI.Upper"))) 
+for(i in 1:p){
+  post.mean <- mean(Beta.post[,i])
+  post.interval <- quantile(Beta.post[,i], c(0.05, 0.95))
+  post.data[i, ] <- c(post.mean, post.interval[1], post.interval[2])
+}
+
+data.frame(post.data)
+```
+latest_inmate_population --> +
+total_inmate_cases --> -
+prison --> +
+metro --> -
+```{r inmate infection rate full linear model w g prior}
+# inmate infection rate model w/ g prior
+X.iir.full["intercept"] <- rep(1, nrow(X.iir.full))
+p <- ncol(X.iir.full)
+X <- as.matrix(X.iir.full)
+iir.model.full <-lm.gprior(y.iir,X,g=dim(X)[1],nu0=1,S=10000)
+Beta.post <- iir.model.full$beta
+# Posterior mean + 90% Credible Interval
+post.data <- matrix(1:(p*3), nrow=p, dimnames = list(colnames(X.iir.full), c("Posterior.Mean", "CI.Lower", "CI.Upper"))) 
+for(i in 1:p){
+  post.mean <- mean(Beta.post[,i])
+  post.interval <- quantile(Beta.post[,i], c(0.05, 0.95))
+  post.data[i, ] <- c(post.mean, post.interval[1], post.interval[2])
+}
+
+data.frame(post.data)
+```
+inmate_infection_rate --> -
+total_inmate_cases --> +
+metro --> +
+officer_infection_rate --> +
+```{r inmate mortality model w mask usage groups w lm.gprior}
+# inmate mortality model w/ g prior
+X.im.full["NEVER+"] <- X.im.full$NEVER + X.im.full$RARELY + X.im.full$SOMETIMES
+X.im.mask.grouped <- select(X.im.full, -c("NEVER", "RARELY", "SOMETIMES", "FREQUENTLY"))
+p <- ncol(X.im.mask.grouped)
+X <- as.matrix(X.im.mask.grouped)
+im.model.full <-lm.gprior(y.im,X,g=dim(X)[1],nu0=1,S=10000)
+Beta.post <- im.model.full$beta
+# Posterior mean + 90% Credible Interval
+post.data <- matrix(1:(p*3), nrow=p, dimnames = list(colnames(X.im.mask.grouped), c("Posterior.Mean", "CI.Lower", "CI.Upper"))) 
+for(i in 1:p){
+  post.mean <- mean(Beta.post[,i])
+  post.interval <- quantile(Beta.post[,i], c(0.05, 0.95))
+  post.data[i, ] <- c(post.mean, post.interval[1], post.interval[2])
+}
+
+data.frame(post.data)
+```
+Same basic results as w individual mask usage terms, but with smaller variance
+```{r inmate infection rate model w mask usage groups w lm.gprior}
+# inmate mortality model w/ g prior
+X.iir.full["NEVER+"] <- X.iir.full$NEVER + X.iir.full$RARELY + X.iir.full$SOMETIMES
+X.iir.mask.grouped <- select(X.iir.full, -c("NEVER", "RARELY", "SOMETIMES", "FREQUENTLY"))
+p <- ncol(X.iir.mask.grouped)
+X <- as.matrix(X.iir.mask.grouped)
+iir.model.full <-lm.gprior(y.iir,X,g=dim(X)[1],nu0=1,S=10000)
+Beta.post <- iir.model.full$beta
+# Posterior mean + 90% Credible Interval
+post.data <- matrix(1:(p*3), nrow=p, dimnames = list(colnames(X.iir.mask.grouped), c("Posterior.Mean", "CI.Lower", "CI.Upper"))) 
+for(i in 1:p){
+  post.mean <- mean(Beta.post[,i])
+  post.interval <- quantile(Beta.post[,i], c(0.05, 0.95))
+  post.data[i, ] <- c(post.mean, post.interval[1], post.interval[2])
+}
+
+data.frame(post.data)
+```
+Same basic results as w individual mask usage terms, but with smaller variance
+```{r inmate mortality interaction terms model w lm.gprior}
+# inmate mortality model w/ g prior
+X.im.interactions <- X.im.mask.grouped
+X.im.interactions["inmate.pop.X.prison"] <- X.im.mask.grouped$latest_inmate_population * X.im.mask.grouped$prison
+X.im.interactions["inmate.pop.X.metro"] <- X.im.mask.grouped$latest_inmate_population * X.im.mask.grouped$metro
+X.im.interactions["inmate.pop.X.NEVER"] <- X.im.mask.grouped$latest_inmate_population * X.im.mask.grouped$`NEVER+`
+X.im.interactions["inmate.pop.X.ALWAYS"] <- X.im.mask.grouped$latest_inmate_population * X.im.mask.grouped$ALWAYS
+X.im.interactions["inmate.cases.X.prison"] <- X.im.mask.grouped$total_inmate_cases * X.im.mask.grouped$prison
+X.im.interactions["inmate.cases.X.metro"] <- X.im.mask.grouped$total_inmate_cases * X.im.mask.grouped$metro
+X.im.interactions["inmate.cases.X.NEVER"] <- X.im.mask.grouped$total_inmate_cases * X.im.mask.grouped$`NEVER+`
+X.im.interactions["inmate.cases.X.ALWAYS"] <- X.im.mask.grouped$total_inmate_cases * X.im.mask.grouped$ALWAYS
+X.im.interactions["inmate.cases.X.officer.cases"] <- X.im.mask.grouped$total_inmate_cases *
+  X.im.mask.grouped$total_officer_cases
+X.im.interactions["officer.cases.X.prison"] <- X.im.mask.grouped$total_officer_cases * X.im.mask.grouped$prison
+X.im.interactions["officer.cases.X.metro"] <- X.im.mask.grouped$total_officer_cases * X.im.mask.grouped$metro
+X.im.interactions["officer.cases.X.NEVER"] <- X.im.mask.grouped$total_officer_cases * X.im.mask.grouped$`NEVER+`
+X.im.interactions["officer.cases.X.ALWAYS"] <- X.im.mask.grouped$total_officer_cases * X.im.mask.grouped$ALWAYS
+
+p <- ncol(X.im.interactions)
+X <- as.matrix(X.im.interactions)
+im.model.int <-lm.gprior(y.im,X,g=dim(X)[1],nu0=1,S=10000)
+Beta.post <- im.model.int$beta
+# Posterior mean + 90% Credible Interval
+post.data <- matrix(1:(p*3), nrow=p, dimnames = list(colnames(X.im.interactions), c("Posterior.Mean", "CI.Lower", "CI.Upper"))) 
+for(i in 1:p){
+  post.mean <- mean(Beta.post[,i])
+  post.interval <- quantile(Beta.post[,i], c(0.05, 0.95))
+  post.data[i, ] <- c(post.mean, post.interval[1], post.interval[2])
+}
+
+data.frame(post.data)
+```
+latest_inmate_population --> +
+total_inmate_cases --> -
+total_officer_cases --> -
+inmate_population * NEVER --> -
+inmate_population * ALWAYS --> -
+inmate_cases * prison --> -
+inmate_cases * NEVER --> +
+inmate_cases * ALWAYS --> +
+officer_cases * prison --> -
+officer_cases * metro --> -
+officer_cases * NEVER --> +
+officer_cases * ALWAYS --> +
+```{r inmate infection rate interaction terms model w lm.gprior}
+X.iir.interactions <- X.iir.mask.grouped
+X.iir.interactions["inmate.pop.X.prison"] <- X.iir.mask.grouped$latest_inmate_population * X.iir.mask.grouped$prison
+X.iir.interactions["inmate.pop.X.metro"] <- X.iir.mask.grouped$latest_inmate_population * X.iir.mask.grouped$metro
+X.iir.interactions["inmate.pop.X.NEVER"] <- X.iir.mask.grouped$latest_inmate_population * X.iir.mask.grouped$`NEVER+`
+X.iir.interactions["inmate.pop.X.ALWAYS"] <- X.iir.mask.grouped$latest_inmate_population * X.iir.mask.grouped$ALWAYS
+X.iir.interactions["inmate.cases.X.prison"] <- X.iir.mask.grouped$total_inmate_cases * X.iir.mask.grouped$prison
+X.iir.interactions["inmate.cases.X.metro"] <- X.iir.mask.grouped$total_inmate_cases * X.iir.mask.grouped$metro
+X.iir.interactions["inmate.cases.X.NEVER"] <- X.iir.mask.grouped$total_inmate_cases * X.iir.mask.grouped$`NEVER+`
+X.iir.interactions["inmate.cases.X.ALWAYS"] <- X.iir.mask.grouped$total_inmate_cases * X.iir.mask.grouped$ALWAYS
+X.iir.interactions["inmate.cases.X.officer.cases"] <- X.iir.mask.grouped$total_inmate_cases *
+  X.iir.mask.grouped$total_officer_cases
+X.iir.interactions["officer.cases.X.prison"] <- X.iir.mask.grouped$total_officer_cases * X.iir.mask.grouped$prison
+X.iir.interactions["officer.cases.X.metro"] <- X.iir.mask.grouped$total_officer_cases * X.iir.mask.grouped$metro
+X.iir.interactions["officer.cases.X.NEVER"] <- X.iir.mask.grouped$total_officer_cases * X.iir.mask.grouped$`NEVER+`
+X.iir.interactions["officer.cases.X.ALWAYS"] <- X.iir.mask.grouped$total_officer_cases * X.iir.mask.grouped$ALWAYS
+X.iir.interactions["officer.ir.X.prison"] <- X.iir.mask.grouped$officer_infection_rate * X.iir.mask.grouped$prison
+X.iir.interactions["officer.ir.X.metro"] <- X.iir.mask.grouped$officer_infection_rate * X.iir.mask.grouped$metro
+X.iir.interactions["officer.ir.X.NEVER"] <- X.iir.mask.grouped$officer_infection_rate * X.iir.mask.grouped$`NEVER+`
+X.iir.interactions["officer.ir.X.ALWAYS"] <- X.iir.mask.grouped$officer_infection_rate * X.iir.mask.grouped$ALWAYS
+X.iir.interactions["officer.ir.X.inmate.cases"] <- X.iir.mask.grouped$officer_infection_rate *
+  X.iir.mask.grouped$total_inmate_cases
+
+
+
+p <- ncol(X.iir.interactions)
+X <- as.matrix(X.iir.interactions)
+iir.model.int <-lm.gprior(y.iir,X,g=dim(X)[1],nu0=1,S=10000)
+Beta.post <- iir.model.int$beta
+# Posterior mean + 90% Credible Interval
+post.data <- matrix(1:(p*3), nrow=p, dimnames = list(colnames(X.iir.interactions), c("Posterior.Mean", "CI.Lower", "CI.Upper"))) 
+for(i in 1:p){
+  post.mean <- mean(Beta.post[,i])
+  post.interval <- quantile(Beta.post[,i], c(0.05, 0.95))
+  post.data[i, ] <- c(post.mean, post.interval[1], post.interval[2])
+}
+
+data.frame(post.data)
+```
+latest_inmate_population --> -
+total_inmate_cases --> +
+metro --> +
+ALWAYS --> -
+intercept --> +
+inmate_population * metro --> -
+inmate_population * NEVER --> +
+inmate_population * ALWAYS --> +
+inmate_cases * metro --> +
+inmate_cases * ALWAYS --> -
+officer_cases * NEVER --> -
+officer_cases * ALWAYS --> +
+```{r inmate deaths full linear model with g prior}
+# inmate deaths model
+y.id <- ga_facilities$total_inmate_deaths
+X.id.full <- select(ga_facilities, -c("facility_type", "facility_county", "fips", "facility_state", "facility_group",
+                                      "inmate_mortality", "total_inmate_deaths"))
+# inmate mortality model w/ g prior
+X.id.full["intercept"] <- rep(1, nrow(X.id.full))
+p <- ncol(X.id.full)
+X <- as.matrix(X.id.full)
+id.model.full <-lm.gprior(y.id,X,g=dim(X)[1],nu0=1,S=10000)
+Beta.post <- id.model.full$beta
+# Posterior mean + 90% Credible Interval
+post.data <- matrix(1:(p*3), nrow=p, dimnames = list(colnames(X.id.full), c("Posterior.Mean", "CI.Lower", "CI.Upper"))) 
+for(i in 1:p){
+  post.mean <- mean(Beta.post[,i])
+  post.interval <- quantile(Beta.post[,i], c(0.05, 0.95))
+  post.data[i, ] <- c(post.mean, post.interval[1], post.interval[2])
+}
+
+data.frame(post.data)
+```
+latest_inmate_population --> +
+prison --> +
+metro --> -
+```{r r inmate deaths w grouped mask usage lm.gprior}
+X.id.full["NEVER+"] <- X.id.full$NEVER + X.id.full$RARELY + X.id.full$SOMETIMES
+X.id.mask.grouped <- select(X.id.full, -c("NEVER", "RARELY", "SOMETIMES", "FREQUENTLY"))
+p <- ncol(X.id.mask.grouped)
+X <- as.matrix(X.id.mask.grouped)
+id.mask.grouped <-lm.gprior(y.id,X,g=dim(X)[1],nu0=1,S=10000)
+Beta.post <- id.mask.grouped$beta
+# Posterior mean + 90% Credible Interval
+post.data <- matrix(1:(p*3), nrow=p, dimnames = list(colnames(X.id.mask.grouped), c("Posterior.Mean", "CI.Lower", "CI.Upper"))) 
+for(i in 1:p){
+  post.mean <- mean(Beta.post[,i])
+  post.interval <- quantile(Beta.post[,i], c(0.05, 0.95))
+  post.data[i, ] <- c(post.mean, post.interval[1], post.interval[2])
+}
+
+data.frame(post.data)
+```
+Same as non-grouped model
+

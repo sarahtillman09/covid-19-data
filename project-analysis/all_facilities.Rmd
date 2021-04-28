@@ -1,0 +1,224 @@
+---
+title: "all_facilities"
+author: "Sarah Tillman"
+date: "4/27/2021"
+output: html_document
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+# library & packages
+```{r load libraries, error=FALSE, message=FALSE}
+library(plyr)
+library(magrittr)
+library(readr)
+library(tidyverse)
+library(gridExtra)
+library(rstan)
+library(bayesplot)
+library(loo)
+library(rstanarm)
+library(bayestestR)
+```
+# Cases & Deaths Data
+```{r load data, message=FALSE}
+mask_use <- read_csv(file="../mask-use/mask-use-by-county.csv")
+cases_total <- read_csv(file="../us-states.csv")
+cases_recent <- read_csv(file="../us-counties-recent.csv")
+prison_facilities <- read_csv(file="../prisons/facilities.csv")
+systems <- read.csv(file="../prisons/systems.csv")
+```
+# Prison Facilities Data
+```{r setting up data w cateogorical variables}
+prison_facilities <- prison_facilities %>%
+  filter(facility_type != "Reservation jail" & facility_type != "U.S. Marshalls")
+
+facility_group <- rep(0, nrow(prison_facilities))
+prison_facilities["facility_group"] <- facility_group
+prison <- rep(0, nrow(prison_facilities))
+prison_facilities["prison"] <- prison
+
+prison_facilities <- prison_facilities %>%
+  mutate (facility_group = case_when(
+  facility_type == "Federal halfway house"~ 2,
+  facility_type == "Federal prison"~ 2,
+  facility_type == "State facility"~ 1,
+  facility_type == "State halfway house"~ 1,
+  facility_type == "State juvenile detention"~ 1,
+  facility_type == "State prison"~ 1,
+  facility_type == "State rehabilitation center"~ 1,
+  facility_type == "State work camp"~ 1,
+  TRUE ~ 0)) %>%
+  mutate(prison = case_when(
+    facility_type == "State prison"~ 1,
+    facility_type == "Federal prison"~ 1,
+    TRUE ~ 0))
+
+# add mask use data for surrounding area
+colnames(prison_facilities)[6] <- "fips"
+colnames(mask_use)[1] <- "fips"
+prison_facilities <- inner_join(prison_facilities, mask_use, by = "fips")
+
+# add mortality column
+prison_facilities["mortality"] <- prison_facilities$total_inmate_deaths / prison_facilities$total_inmate_cases
+
+# drop unimportant columns
+facilities <- prison_facilities %>%
+  select(-c(nyt_id, facility_lng, facility_lat, max_inmate_population_2020, note,
+            facility_name, facility_type, fips))
+
+# drop NA's
+facilities <- drop_na(facilities)
+
+# convert categorical variables to factors & scale numerical values
+facilities$prison <- factor(facilities$prison)
+facilities$facility_group <- factor(facilities$facility_group)
+facilities$latest_inmate_population <- scale(facilities$latest_inmate_population)
+facilities$total_inmate_cases <- scale(facilities$total_inmate_cases)
+facilities$total_officer_cases <- scale(facilities$total_officer_cases)
+facilities$total_inmate_deaths <- scale(facilities$total_inmate_deaths)
+facilities$NEVER <- scale(facilities$NEVER)
+facilities$RARELY <- scale(facilities$RARELY)
+facilities$SOMETIMES <- scale(facilities$SOMETIMES)
+facilities$FREQUENTLY <- scale(facilities$FREQUENTLY)
+facilities$ALWAYS <- scale(facilities$ALWAYS)
+facilities$total_officer_deaths <- scale(facilities$total_officer_deaths)
+facilities$mortality <- scale(facilities$mortality)
+```
+# EDA on Prison Facilities 
+```{r}
+p1 <- facilities %>%
+  ggplot(aes(x=mortality)) + geom_density()
+p1
+```
+
+```{r}
+new.facilities <- facilities %>%
+  filter(mortality < 3)
+# rescale variables
+new.facilities$latest_inmate_population <- scale(new.facilities$latest_inmate_population)
+new.facilities$total_inmate_cases <- scale(new.facilities$total_inmate_cases)
+new.facilities$total_officer_cases <- scale(new.facilities$total_officer_cases)
+new.facilities$total_inmate_deaths <- scale(new.facilities$total_inmate_deaths)
+new.facilities$NEVER <- scale(new.facilities$NEVER)
+new.facilities$RARELY <- scale(new.facilities$RARELY)
+new.facilities$SOMETIMES <- scale(new.facilities$SOMETIMES)
+new.facilities$FREQUENTLY <- scale(new.facilities$FREQUENTLY)
+new.facilities$ALWAYS <- scale(new.facilities$ALWAYS)
+new.facilities$total_officer_deaths <- scale(new.facilities$total_officer_deaths)
+new.facilities$mortality <- scale(new.facilities$mortality)
+
+p1 <- new.facilities %>%
+  ggplot(aes(x=mortality)) + geom_density() + 
+  labs(main="Mortality Rate", x = "Mortality", y="Density")
+p1
+```
+Inmate Deaths is a count variable with a good portion of the observations at 0 (center is at 1.54). 
+```{r}
+p1 <- new.facilities %>%
+  ggplot(aes(x=latest_inmate_population, y = mortality)) + geom_point() +
+  labs(main="Mortality Rate v. Inmate Population", x = "Latest Inmate Population", y = "Mortality")
+p2 <- new.facilities %>%
+  ggplot(aes(x=total_inmate_cases, y = mortality)) + geom_point() +
+  labs(main="Mortality Rate v. Inmate Cases", x = "Total Inmate Cases", y = "Mortality")
+p3 <- new.facilities %>%
+  ggplot(aes(x=total_officer_cases, y = mortality)) + geom_point() +
+  labs(main="Mortality Rate v. Officer Cases", x = "Total Officer Cases", y = "TMortality")
+p4 <- new.facilities %>%
+  ggplot(aes(x=total_officer_deaths, y = mortality)) + geom_point() +
+  labs(main="Mortality Rate v. Officer Deaths", x = "Total Officer Deaths", y = "Mortality")
+
+grid.arrange(p1, p2, p3, p4, ncol=2)
+```
+
+# Regression Modeling
+```{r Bayesian GLM w Gaussian Link}
+intercept.model <-stan_glm(data=facilities,
+                       formula = total_inmate_deaths ~1,
+                       family = gaussian(),
+                     refresh =0,
+                     refresh=0,
+                     seed =10)
+full.glm <- stan_glm(data=facilities,
+                       formula = total_inmate_deaths ~.,
+                       family = gaussian(),
+                     refresh =0,
+                     refresh=0,
+                     seed =1)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# Prison Systems Data
+```{r}
+# add mortality column
+systems["mortality"] <- systems$total_inmate_deaths / systems$total_inmate_cases
+
+# drop unimportant columns
+systems <- systems %>%
+  select(-c(system, max_inmate_population_2020))
+
+# drop NA's
+systems <- drop_na(systems)
+
+# scale numerical values
+systems$latest_inmate_population <- scale(systems$latest_inmate_population)
+systems$total_inmate_cases <- scale(systems$total_inmate_cases)
+systems$total_officer_cases <- scale(systems$total_officer_cases)
+systems$total_inmate_deaths <- scale(systems$total_inmate_deaths)
+systems$total_officer_deaths <- scale(systems$total_officer_deaths)
+systems$mortality <- scale(systems$mortality)
+systems$inmate_tests <- scale(systems$inmate_tests)
+```
+
+```{r}
+systems %>%
+  ggplot(aes(x=mortality)) + geom_density()
+p1 <- systems %>%
+  ggplot(aes(x=latest_inmate_population, y = mortality)) + geom_point() +
+  labs(main="Mortality Rate v. Inmate Population", x = "Latest Inmate Population", y = "Mortality")
+p2 <- systems %>%
+  ggplot(aes(x=total_inmate_cases, y = mortality)) + geom_point() +
+  labs(main="Mortality Rate v. Inmate Cases", x = "Total Inmate Cases", y = "Mortality")
+p3 <- systems %>%
+  ggplot(aes(x=total_officer_cases, y = mortality)) + geom_point() +
+  labs(main="Mortality Rate v. Officer Cases", x = "Total Officer Cases", y = "TMortality")
+p4 <- systems %>%
+  ggplot(aes(x=total_officer_deaths, y = mortality)) + geom_point() +
+  labs(main="Mortality Rate v. Officer Deaths", x = "Total Officer Deaths", y = "Mortality")
+p5 <- systems %>%
+  ggplot(aes(x=inmate_tests, y = mortality)) + geom_point() +
+  labs(main="Mortality Rate v. Inmate Tests", x = "Inmate Tests", y = "Mortality")
+
+grid.arrange(p1, p2, p3, p4, p5, ncol=2)
+```
+
