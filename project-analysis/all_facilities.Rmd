@@ -44,6 +44,8 @@ colnames(systems)[8] <- "state_cases"
 colnames(systems)[9] <- "state_deaths"
 # drop NA's
 systems <- drop_na(systems)
+# save unscaled data as sep. dataset
+systems.us <- systems
 ```
 ```{r scale variables}
 # scale numerical values
@@ -97,7 +99,6 @@ color_scheme_set("red")
 ppc_dens_overlay(y = as.vector(flat.prior$y),
                  yrep = posterior_predict(flat.prior, draws = 50))
 ```
-
 ```{r normal prior}
 normal.prior <- stan_glm(data = sys.data.only, formula = total_inmate_deaths~., prior=normal(0,1),
                          family= gaussian(),
@@ -109,8 +110,7 @@ color_scheme_set("red")
 ppc_dens_overlay(y = as.vector(normal.prior$y),
                  yrep = posterior_predict(normal.prior, draws = 50))
 ```
-
-```{r full interactions model}
+```{r 1st interactions model}
 normal.full1 <- stan_glm(data = sys.data.only, 
                         formula = total_inmate_deaths~ inmate_tests*(total_inmate_cases + latest_inmate_population+
                                                                   total_officer_cases+ total_officer_deaths+
@@ -125,12 +125,12 @@ color_scheme_set("red")
 ppc_dens_overlay(y = as.vector(normal.full1$y),
                  yrep = posterior_predict(normal.full1, draws = 50))
 ```
-```{r}
+```{r 1st int model coefficients}
 round(posterior_interval(normal.full1, prob = 0.90), 3)
 ```
 inmate_tests:latest_inmate_population  0.116  1.532
 inmate_tests:total_officer_deaths     -0.719 -0.196
-```{r}
+```{r 2nd interactions model}
 normal.full2 <- stan_glm(data = sys.data.only, 
                         formula = total_inmate_deaths~ inmate_tests*(total_officer_deaths + 
                                                                        latest_inmate_population) +
@@ -146,12 +146,12 @@ color_scheme_set("red")
 ppc_dens_overlay(y = as.vector(normal.full2$y),
                  yrep = posterior_predict(normal.full2, draws = 50))
 ```
-```{r}
+```{r 2nd int model coefficients}
 round(posterior_interval(normal.full2, prob = 0.90), 3)
 ```
 total_inmate_cases:latest_inmate_population  0.290  1.905
 total_inmate_cases:state_cases              -1.904 -0.031
-```{r}
+```{r 3rd interactions model}
 normal.full3 <- stan_glm(data = sys.data.only, 
                         formula = total_inmate_deaths~ inmate_tests*(total_officer_deaths +
                                                                        latest_inmate_population) +
@@ -168,11 +168,11 @@ color_scheme_set("red")
 ppc_dens_overlay(y = as.vector(normal.full3$y),
                  yrep = posterior_predict(normal.full3, draws = 50))
 ```
-```{r}
+```{r 3rd int model coefficients}
 round(posterior_interval(normal.full3, prob = 0.90), 3)
 ```
 latest_inmate_population:state_deaths         -1.137 -0.078
-```{r}
+```{r 4th interactions model}
 normal.full4 <- stan_glm(data = sys.data.only, 
                         formula = total_inmate_deaths~ inmate_tests*(total_officer_deaths +
                                                                        latest_inmate_population) +
@@ -189,11 +189,11 @@ color_scheme_set("red")
 ppc_dens_overlay(y = as.vector(normal.full4$y),
                  yrep = posterior_predict(normal.full4, draws = 50))
 ```
-```{r}
+```{r 4th int model coefficients}
 round(posterior_interval(normal.full4, prob = 0.90), 3)
 ```
 state_deaths:total_officer_cases            -1.300 -0.027
-```{r}
+```{r 5th interactions model}
 normal.full5 <- stan_glm(data = sys.data.only, 
                         formula = total_inmate_deaths~ inmate_tests*(total_officer_deaths +
                                                                        latest_inmate_population) +
@@ -212,16 +212,16 @@ color_scheme_set("red")
 ppc_dens_overlay(y = as.vector(normal.full5$y),
                  yrep = posterior_predict(normal.full5, draws = 50))
 ```
-```{r}
+```{r 5th int model coefficients}
 round(posterior_interval(normal.full5, prob = 0.90), 3)
 ```
 state_cases:state_deaths                    -1.123 -0.266
-```{r}
+```{r compare main & interaction effects loo}
 loo.ints <- loo(normal.full5, save_psis = T)
 loo.main <- loo(normal.prior, save_psis = T)
 loo_compare(loo.ints, loo.main)
 ```
-```{r}
+```{r model w only sig interactions}
 sig.model <- stan_glm(data = sys.data.only, 
                         formula = total_inmate_deaths~ inmate_tests*(total_officer_deaths +
                                                                        latest_inmate_population) +
@@ -238,10 +238,10 @@ color_scheme_set("red")
 ppc_dens_overlay(y = as.vector(sig.model$y),
                  yrep = posterior_predict(sig.model, draws = 50)) 
 ```
-```{r}
+```{r sig model coefficients}
 round(posterior_interval(sig.model, prob = 0.90), 3)
 ```
-```{r}
+```{r 2nd sig model}
 sig2.model <- stan_glm(data = sys.data.only, 
                         formula = total_inmate_deaths~ inmate_tests*(total_officer_deaths) +
                           latest_inmate_population*(state_deaths) +
@@ -256,27 +256,141 @@ color_scheme_set("red")
 ppc_dens_overlay(y = as.vector(sig2.model$y),
                  yrep = posterior_predict(sig2.model, draws = 50))
 ```
-```{r}
+```{r 2nd sig model coefficients}
 round(posterior_interval(sig2.model, prob = 0.90), 3)
 ```
-```{r}
+```{r compare loo of sig model w only main effects}
 loo.ints <- loo(sig2.model, save_psis = T)
 loo.main <- loo(normal.prior, save_psis = T)
 loo_compare(loo.ints, loo.main)
 ```
-```{r}
+```{r print indiv loo outputs}
 loo.ints
 loo.main
 ```
 Looic is much lower for model with interactions compared to model with only main effects.
-
-```{r}
+```{r loo plots of each observation}
 plot(loo.ints, label_points=TRUE)
 plot(loo.main, label_points=TRUE)
 ```
-3, 5, 9, 22, 28, 32, 35, 37, 38, 43
-```{r}
+# Excess Deaths Data
+```{r excess deaths data, message=FALSE, error=FALSE}
+us_excess_deaths <- read_csv("../excess-deaths/excess_death_us_only.csv")
+```
+```{r filtering excess deaths}
+excess_deaths <- us_excess_deaths %>%
+  select(-c("Suppress", "Note")) %>%
+  filter(Year > 2019)
+excess_deaths$`Week Ending Date` <- as.Date(excess_deaths$`Week Ending Date`)
+```
+```{r filtering data}
+state_excess_deaths <- excess_deaths %>%
+  group_by(State)
 
+num_excess_total <- state_excess_deaths %>%
+  summarise(total_excess = sum(`Exceeds Threshold`))
+
+pre_april_excess_deaths <- state_excess_deaths %>%
+  filter(`Week Ending Date` > "0004-01-20") %>%
+  summarise(pre_april_excess = sum(`Exceeds Threshold`))
+```
+```{r add data to systems}
+sys.copy <- systems
+
+sys.copy <- inner_join(sys.copy, num_excess_total, by=c("system" = "State"))
+sys.copy <- inner_join(sys.copy, pre_april_excess_deaths, by=c("system" = "State"))
+
+sys.copy$total_excess <- scale(sys.copy$total_excess)
+sys.copy$pre_april_excess <- scale(sys.copy$pre_april_excess)
+sys.copy.data <- select(sys.copy, -c("system"))
+```
+```{r model 1 w excess}
+excess1.model <- stan_glm(data = sys.copy.data, 
+                        formula = total_inmate_deaths~ inmate_tests*(total_officer_deaths) +
+                          latest_inmate_population*(state_deaths) +
+                          state_cases*(state_deaths) + total_excess + pre_april_excess, 
+                         prior=normal(0,1),
+                         family= gaussian(),
+                         refresh = 0, refresh = 0, seed = 7)
+posterior.excess1.model <- as.matrix(excess1.model)
+mcmc_areas(posterior.excess1.model, prob=0.90)
+
+color_scheme_set("red")
+ppc_dens_overlay(y = as.vector(excess1.model$y),
+                 yrep = posterior_predict(excess1.model, draws = 50))
+```
+```{r model 2 w excess int terms}
+excess2.model <- stan_glm(data = sys.copy.data, 
+                        formula = total_inmate_deaths~ inmate_tests*(total_officer_deaths) +
+                          latest_inmate_population*(state_deaths) +
+                          state_cases*(state_deaths) + 
+                          total_excess * (inmate_tests + total_officer_deaths + latest_inmate_population +
+                                            state_deaths + state_cases + pre_april_excess) + 
+                          pre_april_excess * (inmate_tests + total_officer_deaths + latest_inmate_population +
+                                            state_deaths + state_cases), 
+                         prior=normal(0,1),
+                         family= gaussian(),
+                         refresh = 0, refresh = 0, seed = 6)
+posterior.excess2.model <- as.matrix(excess2.model)
+mcmc_areas(posterior.excess2.model, prob=0.90)
+
+color_scheme_set("red")
+ppc_dens_overlay(y = as.vector(excess2.model$y),
+                 yrep = posterior_predict(excess2.model, draws = 50))
+```
+```{r model 2 coefficients}
+round(posterior_interval(excess2.model, prob = 0.90), 3)
+```
+```{r model 3 w only main effects}
+excess3.model <- stan_glm(data = sys.copy.data, 
+                        formula = total_inmate_deaths~., 
+                         prior=normal(0,1),
+                         family= gaussian(),
+                         refresh = 0, refresh = 0, seed = 6)
+posterior.excess3.model <- as.matrix(excess3.model)
+mcmc_areas(posterior.excess3.model, prob=0.90)
+
+color_scheme_set("red")
+ppc_dens_overlay(y = as.vector(excess3.model$y),
+                 yrep = posterior_predict(excess3.model, draws = 50))
+```
+```{r removing problem data}
+sys.complete <- systems %>%
+  filter(system != "Montana" & system != "Arkansas" & system != "Nevada" & system != "Oklahoma")
+sys.complete.data <- select(sys.complete, -c("system"))
+```
+```{r sig interactions model w problem data removed}
+sig.complete.model <- stan_glm(data = sys.complete.data, 
+                        formula = total_inmate_deaths~ inmate_tests*(total_officer_deaths) +
+                          latest_inmate_population*(state_deaths) +
+                          state_cases*(state_deaths), 
+                         prior=normal(0,1),
+                         family= gaussian(),
+                         refresh = 0, refresh = 0, seed = 4)
+posterior.sig.complete.model <- as.matrix(sig.complete.model)
+mcmc_areas(posterior.sig.complete.model, prob=0.90)
+
+color_scheme_set("red")
+ppc_dens_overlay(y = as.vector(sig.complete.model$y),
+                 yrep = posterior_predict(sig.complete.model, draws = 50))
+```
+```{r new model coefficients}
+round(posterior_interval(sig.complete.model, prob = 0.90), 3)
+```
+```{r loo comparison of new model w previous int model}
+(loo1 <- loo(sig2.model, save_psis = T))
+(loo2 <- loo(sig.complete.model, save_psis = T))
+```
+Model with the problematic data point removed has lower looic.
+
+
+# Optimized model 
+
+```{r calc BF for final and display}
+library(see)
+
+BF <- bayesfactor_parameters(sig2.model, null=0, direction = "two-sided")
+plot(BF)
 ```
 
 

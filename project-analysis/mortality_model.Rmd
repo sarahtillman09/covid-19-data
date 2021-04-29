@@ -1,0 +1,449 @@
+---
+title: "mortality"
+author: "Sarah Tillman"
+date: "4/29/2021"
+output: pdf_document
+---
+# Set up
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+```{r load libraries, error=FALSE, message=FALSE}
+library(plyr)
+library(magrittr)
+library(readr)
+library(tidyverse)
+library(gridExtra)
+library(rstan)
+library(bayesplot)
+library(loo)
+library(rstanarm)
+library(bayestestR)
+```
+```{r load data, message=FALSE}
+cases_recent <- read_csv(file="../us-states.csv")
+systems.full <- read.csv(file="../prisons/systems.csv")
+```
+# State Data
+```{r state data only through March}
+state.cases <- cases_recent %>%
+  filter(date == "2021-03-31") %>%
+  select(-c("date", "fips"))
+```
+# Prison Systems Data
+```{r combine state data & add mortality}
+# drop unimportant columns & add overall state data
+systems <- systems.full %>%
+  inner_join(state.cases,by=c("system" = "state")) %>%
+  select(-c(max_inmate_population_2020))
+# rename state data columns
+colnames(systems)[8] <- "state_cases"
+colnames(systems)[9] <- "state_deaths"
+# drop NA's
+systems <- drop_na(systems)
+# add mortality for system and for US
+systems["inmate_mortality"] <- systems$total_inmate_deaths / systems$total_inmate_cases
+systems["state_mortality"] <- systems$state_deaths / systems$state_cases
+# save unscaled data as sep. dataset
+systems.us <- systems
+```
+```{r scale data}
+systems$latest_inmate_population <- scale(systems$latest_inmate_population)
+systems$total_inmate_cases <- scale(systems$total_inmate_cases)
+systems$total_officer_cases <- scale(systems$total_officer_cases)
+systems$total_officer_deaths <- scale(systems$total_officer_deaths)
+systems$inmate_tests <- scale(systems$inmate_tests)
+systems$state_cases <- scale(systems$state_cases)
+systems$inmate_mortality <- scale(systems$inmate_mortality)
+systems$state_mortality <- scale(systems$state_mortality)
+```
+```{r drop unecessary data}
+sys.data <- systems %>%
+  select(-c("system", "total_inmate_deaths", "state_deaths"))
+```
+```{r rv graphs}
+sys.data %>%
+  ggplot(aes(x=inmate_mortality)) + geom_density()
+p1 <- sys.data %>%
+  ggplot(aes(x=latest_inmate_population, y = inmate_mortality)) + geom_point() +
+  labs(x = "Latest Inmate Population", y = "Inmate Mortality")
+p2 <- sys.data %>%
+  ggplot(aes(x=total_inmate_cases, y = inmate_mortality)) + geom_point() +
+  labs(x = "Total Inmate Cases", y = "Inmate Mortality")
+p3 <- sys.data %>%
+  ggplot(aes(x=total_officer_cases, y = inmate_mortality)) + geom_point() +
+  labs(x = "Total Officer Cases", y = "Inmate Mortality")
+p4 <- sys.data %>%
+  ggplot(aes(x=total_officer_deaths, y = inmate_mortality)) + geom_point() +
+  labs(x = "Total Officer Deaths", y = "Inmate Mortality")
+p5 <- sys.data %>%
+  ggplot(aes(x=inmate_tests, y = inmate_mortality)) + geom_point() +
+  labs(x = "Inmate Tests", y = "Inmate Mortality")
+p6 <- sys.data %>%
+  ggplot(aes(x=state_cases, y = inmate_mortality)) + geom_point() +
+  labs(x = "State Cases", y = "Inmate Mortality")
+p7 <- sys.data %>%
+  ggplot(aes(x=state_mortality, y = inmate_mortality)) + geom_point() +
+  labs(x = "State Mortality", y = "Inmate Mortality")
+
+grid.arrange(p1, p2, p3, p4, p5, p6, p7, ncol=2)
+```
+
+# Regression Modeling
+```{r main only}
+main.model <- stan_glm(data = sys.data, formula = inmate_mortality~., prior=normal(0,1),
+                         family= gaussian(),
+                         refresh = 0, refresh = 0, seed = 2)
+posterior.main.model <- as.matrix(main.model)
+mcmc_areas(posterior.main.model, prob=0.90)
+
+color_scheme_set("red")
+ppc_dens_overlay(y = as.vector(main.model$y),
+                 yrep = posterior_predict(main.model, draws = 50))
+```
+```{r interactions 1}
+int1.model <- stan_glm(data = sys.data, formula = inmate_mortality~inmate_tests*., prior=normal(0,1),
+                         family= gaussian(),
+                         refresh = 0, refresh = 0, seed = 2)
+posterior.int1.model <- as.matrix(int1.model)
+mcmc_areas(posterior.int1.model, prob=0.90)
+
+color_scheme_set("red")
+ppc_dens_overlay(y = as.vector(int1.model$y),
+                 yrep = posterior_predict(int1.model, draws = 50))
+
+round(posterior_interval(int1.model, prob = 0.90), 3)
+```
+```{r interaction 2}
+int2.model <- stan_glm(data = sys.data, formula = inmate_mortality~total_inmate_cases*., prior=normal(0,1),
+                         family= gaussian(),
+                         refresh = 0, refresh = 0, seed = 2)
+posterior.int2.model <- as.matrix(int2.model)
+mcmc_areas(posterior.int2.model, prob=0.90)
+
+color_scheme_set("red")
+ppc_dens_overlay(y = as.vector(int2.model$y),
+                 yrep = posterior_predict(int2.model, draws = 50))
+
+round(posterior_interval(int2.model, prob = 0.90), 3)
+```
+```{r interaction 3}
+int3.model <- stan_glm(data = sys.data, formula = inmate_mortality~latest_inmate_population*., prior=normal(0,1),
+                         family= gaussian(),
+                         refresh = 0, refresh = 0, seed = 2)
+posterior.int3.model <- as.matrix(int3.model)
+mcmc_areas(posterior.int3.model, prob=0.90)
+
+color_scheme_set("red")
+ppc_dens_overlay(y = as.vector(int3.model$y),
+                 yrep = posterior_predict(int3.model, draws = 50))
+
+round(posterior_interval(int3.model, prob = 0.90), 3)
+```
+```{r interaction 4}
+int4.model <- stan_glm(data = sys.data, formula = inmate_mortality~total_officer_cases*., prior=normal(0,1),
+                         family= gaussian(),
+                         refresh = 0, refresh = 0, seed = 2)
+posterior.int4.model <- as.matrix(int4.model)
+mcmc_areas(posterior.int4.model, prob=0.90)
+
+color_scheme_set("red")
+ppc_dens_overlay(y = as.vector(int4.model$y),
+                 yrep = posterior_predict(int4.model, draws = 50))
+
+round(posterior_interval(int4.model, prob = 0.90), 3)
+```
+total_officer_cases:total_inmate_cases        0.276  1.506
+```{r interaction 5}
+int5.model <- stan_glm(data = sys.data, formula = inmate_mortality~total_officer_deaths*., prior=normal(0,1),
+                         family= gaussian(),
+                         refresh = 0, refresh = 0, seed = 2)
+posterior.int5.model <- as.matrix(int5.model)
+mcmc_areas(posterior.int5.model, prob=0.90)
+
+color_scheme_set("red")
+ppc_dens_overlay(y = as.vector(int5.model$y),
+                 yrep = posterior_predict(int5.model, draws = 50))
+
+round(posterior_interval(int5.model, prob = 0.90), 3)
+```
+```{r interaction 6}
+int6.model <- stan_glm(data = sys.data, formula = inmate_mortality~state_cases*., prior=normal(0,1),
+                         family= gaussian(),
+                         refresh = 0, refresh = 0, seed = 2)
+posterior.int6.model <- as.matrix(int6.model)
+mcmc_areas(posterior.int6.model, prob=0.90)
+
+color_scheme_set("red")
+ppc_dens_overlay(y = as.vector(int6.model$y),
+                 yrep = posterior_predict(int6.model, draws = 50))
+
+round(posterior_interval(int6.model, prob = 0.90), 3)
+```
+```{r interaction 7}
+int7.model <- stan_glm(data = sys.data, formula = inmate_mortality~state_mortality*., prior=normal(0,1),
+                         family= gaussian(),
+                         refresh = 0, refresh = 0, seed = 2)
+posterior.int7.model <- as.matrix(int7.model)
+mcmc_areas(posterior.int7.model, prob=0.90)
+
+color_scheme_set("red")
+ppc_dens_overlay(y = as.vector(int7.model$y),
+                 yrep = posterior_predict(int7.model, draws = 50))
+
+round(posterior_interval(int7.model, prob = 0.90), 3)
+```
+state_mortality:inmate_tests              0.002  0.871
+```{r model w sig interactions}
+sig.int.model <- stan_glm(data = sys.data, formula = inmate_mortality~. + total_officer_cases*total_inmate_cases +
+                         state_mortality*total_inmate_cases, prior=normal(0,1),
+                         family= gaussian(),
+                         refresh = 0, refresh = 0, seed = 2)
+posterior.sig.int.model <- as.matrix(sig.int.model)
+mcmc_areas(sig.int.model, prob=0.90)
+
+color_scheme_set("red")
+ppc_dens_overlay(y = as.vector(sig.int.model$y),
+                 yrep = posterior_predict(sig.int.model, draws = 50))
+
+round(posterior_interval(sig.int.model, prob = 0.90), 3)
+```
+state_mortality                         0.031 0.570
+latest_inmate_population                0.318 1.817
+```{r w sig interactions}
+sig.model <- stan_glm(data = sys.data, formula = inmate_mortality~ latest_inmate_population +
+                        total_officer_cases*total_inmate_cases + state_mortality*total_inmate_cases,
+                      prior=normal(0,1), family= gaussian(), refresh = 0, refresh = 0, seed = 2)
+posterior.sig.model <- as.matrix(sig.model)
+mcmc_areas(sig.model, prob=0.90)
+
+color_scheme_set("red")
+ppc_dens_overlay(y = as.vector(sig.model$y),
+                 yrep = posterior_predict(sig.model, draws = 50))
+
+round(posterior_interval(sig.model, prob = 0.90), 3)
+```
+```{r only sig effects}
+main.model <- stan_glm(data = sys.data, formula = inmate_mortality~ latest_inmate_population +
+                        state_mortality + total_inmate_cases,
+                      prior=normal(0,1), family= gaussian(), refresh = 0, refresh = 0, seed = 2)
+posterior.main.model <- as.matrix(main.model)
+mcmc_areas(main.model, prob=0.90)
+
+color_scheme_set("red")
+ppc_dens_overlay(y = as.vector(main.model$y),
+                 yrep = posterior_predict(main.model, draws = 50))
+
+round(posterior_interval(main.model, prob = 0.90), 3)
+```
+
+# Without Mortality Outliers
+```{r}
+boxplot(sys.data$inmate_mortality)
+
+sys.data <- sys.data %>%
+  filter(inmate_mortality < 2)
+```
+```{r}
+sys.data$latest_inmate_population <- scale(sys.data$latest_inmate_population)
+sys.data$total_inmate_cases <- scale(sys.data$total_inmate_cases)
+sys.data$total_officer_cases <- scale(sys.data$total_officer_cases)
+sys.data$total_officer_deaths <- scale(sys.data$total_officer_deaths)
+sys.data$inmate_tests <- scale(sys.data$inmate_tests)
+sys.data$state_cases <- scale(sys.data$state_cases)
+sys.data$inmate_mortality <- scale(sys.data$inmate_mortality)
+sys.data$state_mortality <- scale(sys.data$state_mortality)
+```
+```{r}
+main.model <- stan_glm(data = sys.data, formula = inmate_mortality~., prior=normal(0,1),
+                         family= gaussian(),
+                         refresh = 0, refresh = 0, seed = 2)
+posterior.main.model <- as.matrix(main.model)
+mcmc_areas(posterior.main.model, prob=0.90)
+
+color_scheme_set("red")
+ppc_dens_overlay(y = as.vector(main.model$y),
+                 yrep = posterior_predict(main.model, draws = 50))
+
+round(posterior_interval(main.model, prob = 0.90), 3)
+```
+```{r interactions 1}
+int1.model <- stan_glm(data = sys.data, formula = inmate_mortality~inmate_tests*., prior=normal(0,1),
+                         family= gaussian(),
+                         refresh = 0, refresh = 0, seed = 2)
+posterior.int1.model <- as.matrix(int1.model)
+mcmc_areas(posterior.int1.model, prob=0.90)
+
+color_scheme_set("red")
+ppc_dens_overlay(y = as.vector(int1.model$y),
+                 yrep = posterior_predict(int1.model, draws = 50))
+
+round(posterior_interval(int1.model, prob = 0.90), 3)
+```
+```{r interaction 2}
+int2.model <- stan_glm(data = sys.data, formula = inmate_mortality~total_inmate_cases*., prior=normal(0,1),
+                         family= gaussian(),
+                         refresh = 0, refresh = 0, seed = 2)
+posterior.int2.model <- as.matrix(int2.model)
+mcmc_areas(posterior.int2.model, prob=0.90)
+
+color_scheme_set("red")
+ppc_dens_overlay(y = as.vector(int2.model$y),
+                 yrep = posterior_predict(int2.model, draws = 50))
+
+round(posterior_interval(int2.model, prob = 0.90), 3)
+```
+```{r interaction 3} 
+int3.model <- stan_glm(data = sys.data, formula = inmate_mortality~latest_inmate_population*., prior=normal(0,1),
+                         family= gaussian(),
+                         refresh = 0, refresh = 0, seed = 2)
+posterior.int3.model <- as.matrix(int3.model)
+mcmc_areas(posterior.int3.model, prob=0.90)
+
+color_scheme_set("red")
+ppc_dens_overlay(y = as.vector(int3.model$y),
+                 yrep = posterior_predict(int3.model, draws = 50))
+
+round(posterior_interval(int3.model, prob = 0.90), 3)
+```
+```{r interaction 4} 
+int4.model <- stan_glm(data = sys.data, formula = inmate_mortality~total_officer_cases*., prior=normal(0,1),
+                         family= gaussian(),
+                         refresh = 0, refresh = 0, seed = 2)
+posterior.int4.model <- as.matrix(int4.model)
+mcmc_areas(posterior.int4.model, prob=0.90)
+
+color_scheme_set("red")
+ppc_dens_overlay(y = as.vector(int4.model$y),
+                 yrep = posterior_predict(int4.model, draws = 50))
+
+round(posterior_interval(int4.model, prob = 0.90), 3)
+```
+```{r interaction 5}
+int5.model <- stan_glm(data = sys.data, formula = inmate_mortality~total_officer_deaths*., prior=normal(0,1),
+                         family= gaussian(),
+                         refresh = 0, refresh = 0, seed = 2)
+posterior.int5.model <- as.matrix(int5.model)
+mcmc_areas(posterior.int5.model, prob=0.90)
+
+color_scheme_set("red")
+ppc_dens_overlay(y = as.vector(int5.model$y),
+                 yrep = posterior_predict(int5.model, draws = 50))
+
+round(posterior_interval(int5.model, prob = 0.90), 3)
+```
+```{r interaction 6} 
+int6.model <- stan_glm(data = sys.data, formula = inmate_mortality~state_cases*., prior=normal(0,1),
+                         family= gaussian(),
+                         refresh = 0, refresh = 0, seed = 2)
+posterior.int6.model <- as.matrix(int6.model)
+mcmc_areas(posterior.int6.model, prob=0.90)
+
+color_scheme_set("red")
+ppc_dens_overlay(y = as.vector(int6.model$y),
+                 yrep = posterior_predict(int6.model, draws = 50))
+
+round(posterior_interval(int6.model, prob = 0.90), 3)
+```
+```{r interaction 7} 
+int7.model <- stan_glm(data = sys.data, formula = inmate_mortality~state_mortality*., prior=normal(0,1),
+                         family= gaussian(),
+                         refresh = 0, refresh = 0, seed = 2)
+posterior.int7.model <- as.matrix(int7.model)
+mcmc_areas(posterior.int7.model, prob=0.90)
+
+color_scheme_set("red")
+ppc_dens_overlay(y = as.vector(int7.model$y),
+                 yrep = posterior_predict(int7.model, draws = 50))
+
+round(posterior_interval(int7.model, prob = 0.90), 3)
+```
+state_mortality:state_cases              -1.348 -0.011
+```{r}
+sig.model <- stan_glm(data = sys.data, formula = inmate_mortality~state_mortality*state_cases +
+                        total_inmate_cases + latest_inmate_population, prior=normal(0,1),
+                         family= gaussian(),
+                         refresh = 0, refresh = 0, seed = 2)
+posterior.sig.model <- as.matrix(sig.model)
+mcmc_areas(posterior.sig.model, prob=0.90)
+
+color_scheme_set("red")
+ppc_dens_overlay(y = as.vector(sig.model$y),
+                 yrep = posterior_predict(sig.model, draws = 50))
+
+round(posterior_interval(sig.model, prob = 0.90), 3)
+```
+```{r}
+systems %>%
+  filter(inmate_mortality > 0.5) %>%
+  group_by(system) %>%
+  summarise(n=n())
+```
+
+
+
+
+# With Excess Deaths 
+```{r adding excess deaths data}
+us_excess_deaths <- read_csv("../excess-deaths/excess_death_us_only.csv")
+excess_deaths <- us_excess_deaths %>%
+  select(-c("Suppress", "Note")) %>%
+  filter(Year > 2019)
+excess_deaths$`Week Ending Date` <- as.Date(excess_deaths$`Week Ending Date`)
+
+state_excess_deaths <- excess_deaths %>%
+  group_by(State)
+
+num_excess_total <- state_excess_deaths %>%
+  summarise(total_excess = sum(`Exceeds Threshold`))
+
+pre_april_excess_deaths <- state_excess_deaths %>%
+  filter(`Week Ending Date` > "0004-01-20") %>%
+  summarise(pre_april_excess = sum(`Exceeds Threshold`))
+
+sys.copy <- systems
+
+sys.copy <- inner_join(sys.copy, num_excess_total, by=c("system" = "State"))
+sys.copy <- inner_join(sys.copy, pre_april_excess_deaths, by=c("system" = "State"))
+
+sys.copy$total_excess <- scale(sys.copy$total_excess)
+sys.copy$pre_april_excess <- scale(sys.copy$pre_april_excess)
+sys.copy.data <- select(sys.copy, -c("system", "total_inmate_deaths", "state_deaths"))
+```
+```{r main model}
+main.model <- stan_glm(data = sys.copy.data, formula = inmate_mortality~., prior=normal(0,1),
+                         family= gaussian(),
+                         refresh = 0, refresh = 0, seed = 2)
+posterior.main.model <- as.matrix(main.model)
+mcmc_areas(posterior.main.model, prob=0.90)
+
+color_scheme_set("red")
+ppc_dens_overlay(y = as.vector(main.model$y),
+                 yrep = posterior_predict(main.model, draws = 50))
+round(posterior_interval(main.model, prob = 0.90), 3)
+```
+```{r interactions 8}
+int8.model <- stan_glm(data = sys.copy.data, formula = inmate_mortality~total_excess*., prior=normal(0,1),
+                         family= gaussian(),
+                         refresh = 0, refresh = 0, seed = 2)
+posterior.int8.model <- as.matrix(int8.model)
+mcmc_areas(posterior.int8.model, prob=0.90)
+
+color_scheme_set("red")
+ppc_dens_overlay(y = as.vector(int8.model$y),
+                 yrep = posterior_predict(int8.model, draws = 50))
+round(posterior_interval(int8.model, prob = 0.90), 3)
+```
+```{r interactions 9}
+int9.model <- stan_glm(data = sys.copy.data, formula = inmate_mortality~pre_april_excess*., prior=normal(0,1),
+                         family= gaussian(),
+                         refresh = 0, refresh = 0, seed = 2)
+posterior.int9.model <- as.matrix(int9.model)
+mcmc_areas(posterior.int9.model, prob=0.90)
+
+color_scheme_set("red")
+ppc_dens_overlay(y = as.vector(int9.model$y),
+                 yrep = posterior_predict(int9.model, draws = 50))
+round(posterior_interval(int9.model, prob = 0.90), 3)
+```
+

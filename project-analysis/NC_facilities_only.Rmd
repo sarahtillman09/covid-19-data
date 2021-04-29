@@ -1,0 +1,140 @@
+---
+title: "NC_Only_model"
+author: "Sarah Tillman"
+date: "4/29/2021"
+output: pdf_document
+---
+# Setup
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+```{r load libraries, error=FALSE, message=FALSE}
+library(plyr)
+library(magrittr)
+library(readr)
+library(tidyverse)
+library(gridExtra)
+library(rstan)
+library(bayesplot)
+library(loo)
+library(rstanarm)
+library(bayestestR)
+```
+# Data
+```{r load data, message=FALSE}
+mask_use.full <- read_csv(file="../mask-use/mask-use-by-county.csv")
+county_cases.full <- read_csv(file="../us-counties.csv")
+prison_facilities.full <- read_csv(file="../prisons/facilities.csv")
+```
+```{r filtering for NC}
+facilities <- prison_facilities.full %>%
+  filter(facility_state == "North Carolina")
+facilities %>%
+  group_by(facility_type) %>%
+  summarise(n=n())
+```
+```{r creating categorical vars for jail & prison}
+jail <- rep(0, nrow(facilities))
+prison <- rep(0, nrow(facilities))
+facilities["jail"] <- jail # all local facilities == Jail
+facilities["prison"] <- prison # all prisons == Prison
+facilities <- facilities %>%
+  mutate(jail = case_when(
+    facility_type == "Jail" ~ 1,
+    TRUE ~ 0)) %>%
+  mutate(prison = case_when(
+    facility_type == "State prison" ~ 1,
+    facility_type == "Federal prison" ~ 1,
+    TRUE ~ 0))
+```
+```{r removing unnecessary data}
+county_cases <- county_cases.full %>%
+  filter(date == "2021-03-31" & state == "North Carolina") %>%
+  select(-c("date", "county", "state"))
+facilities <- facilities %>%
+  select(-c("nyt_id", "facility_name", "facility_type", "facility_city", "facility_county", "facility_state",
+            "facility_lng", "facility_lat", "note"))
+```
+```{r combining datasets by county}
+fac.data <- facilities %>%
+  inner_join(county_cases, by=c("facility_county_fips" = "fips")) %>%
+  inner_join(mask_use.full, by=c("facility_county_fips" = "COUNTYFP"))
+```
+```{r}
+colSums(is.na(fac.data))
+fac.data <- fac.data %>%
+  select(-c("max_inmate_population_2020", "facility_county_fips")) %>%
+  drop_na()
+```
+
+# EDA
+```{r scale data}
+fac.us <- fac.data # unscaled data
+fac.data$jail <- as.factor(fac.data$jail)
+fac.data$prison <- as.factor(fac.data$prison)
+fac.data$latest_inmate_population <- scale(fac.data$latest_inmate_population) 
+fac.data$total_inmate_cases <- scale(fac.data$total_inmate_cases)
+fac.data$total_inmate_deaths <- scale(fac.data$total_inmate_deaths)
+fac.data$total_officer_cases <- scale(fac.data$total_officer_cases)
+fac.data$total_officer_deaths <- scale(fac.data$total_officer_deaths)
+fac.data$cases <- scale(fac.data$cases)
+fac.data$deaths <- scale(fac.data$deaths)
+fac.data$NEVER <- scale(fac.data$NEVER)
+fac.data$RARELY <- scale(fac.data$RARELY)
+fac.data$SOMETIMES <- scale(fac.data$SOMETIMES)
+fac.data$FREQUENTLY <- scale(fac.data$FREQUENTLY)
+fac.data$ALWAYS <- scale(fac.data$ALWAYS)
+```
+```{r remove outlier}
+boxplot(fac.data$total_inmate_deaths)
+fac.data <- fac.data %>%
+  filter(total_inmate_deaths < 3)
+```
+```{r rescale data}
+fac.data$jail <- as.factor(fac.data$jail)
+fac.data$prison <- as.factor(fac.data$prison)
+fac.data$latest_inmate_population <- scale(fac.data$latest_inmate_population) 
+fac.data$total_inmate_cases <- scale(fac.data$total_inmate_cases)
+fac.data$total_inmate_deaths <- scale(fac.data$total_inmate_deaths)
+fac.data$total_officer_cases <- scale(fac.data$total_officer_cases)
+fac.data$total_officer_deaths <- scale(fac.data$total_officer_deaths)
+fac.data$cases <- scale(fac.data$cases)
+fac.data$deaths <- scale(fac.data$deaths)
+fac.data$NEVER <- scale(fac.data$NEVER)
+fac.data$RARELY <- scale(fac.data$RARELY)
+fac.data$SOMETIMES <- scale(fac.data$SOMETIMES)
+fac.data$FREQUENTLY <- scale(fac.data$FREQUENTLY)
+fac.data$ALWAYS <- scale(fac.data$ALWAYS)
+```
+
+```{r full model}
+full.model <- stan_glm(data = fac.data, 
+                        formula = total_inmate_deaths~., 
+                         prior=normal(0,1),
+                         family= gaussian(),
+                         refresh = 0, refresh = 0, seed = 4)
+mcmc_areas(as.matrix(full.model), prob=0.90)
+color_scheme_set("red")
+ppc_dens_overlay(y = as.vector(full.model$y),
+                 yrep = posterior_predict(full.model, draws = 50))
+round(posterior_interval(full.model, prob = 0.90), 3)
+```
+                        
+```{r dropping some mask data}
+fac.never <- fac.data %>%
+  select(-c("RARELY", "SOMETIMES", "FREQUENTLY", "jail"))
+```
+
+```{r new full model}
+new.model <- stan_glm(data = fac.never, 
+                        formula = total_inmate_deaths~., 
+                         prior=normal(0,1),
+                         family= gaussian(),
+                         refresh = 0, refresh = 0, seed = 4)
+mcmc_areas(as.matrix(new.model), prob=0.90)
+color_scheme_set("red")
+ppc_dens_overlay(y = as.vector(new.model$y),
+                 yrep = posterior_predict(new.model, draws = 50))
+round(posterior_interval(new.model, prob = 0.90), 3)
+```
+
