@@ -363,12 +363,12 @@ loo_compare(loo.sig0, loo.nb1)
 ```
 
 # Compare Loo of Fitted Normal Model v. Fitted Negative Binomial Model
-```{r}
+```{r comparing final loo for Normal v. NB Models}
 loo.sig0
 loo.full.int
 loo_compare(loo.sig0, loo.full.int)
 ```
 These 2 models are not significantly different in prediction rate based on comparisons between their looic and the difference in expected log posterior density.
 
-
-# Comparing Dataset after Removing Outliers
+# Comparing Dataset after Removing Outliers 
+# Compare Differences in PSIS plots for loo.sig0 & loo.full.int
