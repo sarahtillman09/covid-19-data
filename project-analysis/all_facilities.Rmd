@@ -19,6 +19,7 @@ library(bayesplot)
 library(loo)
 library(rstanarm)
 library(bayestestR)
+library(brms)
 ```
 # Cases & Deaths Data
 ```{r load data, message=FALSE}
@@ -382,15 +383,65 @@ round(posterior_interval(sig.complete.model, prob = 0.90), 3)
 (loo2 <- loo(sig.complete.model, save_psis = T))
 ```
 Model with the problematic data point removed has lower looic.
-
-
 # Optimized model 
-
 ```{r calc BF for final and display}
 library(see)
 
 BF <- bayesfactor_parameters(sig2.model, null=0, direction = "two-sided")
 plot(BF)
 ```
+```{r build models in brm}
+#  intercept only
+m0 <- brm(data=sys.data.only, formula=total_inmate_deaths~1, family=gaussian(), refresh=0, 
+          save_pars = save_pars(all = TRUE)) 
+# main effect only
+m1 <- brm(data=sys.data.only, formula=total_inmate_deaths~., family=gaussian(), refresh=0,
+          save_pars = save_pars(all = TRUE))
+# all significant interactions 
+m2 <- brm(data=sys.data.only, formula=total_inmate_deaths~ 
+            inmate_tests*(total_officer_deaths + latest_inmate_population) +
+            total_inmate_cases*(latest_inmate_population + state_cases) +
+            latest_inmate_population*(state_deaths) + state_cases*(state_deaths), 
+          family=gaussian(), refresh=0, save_pars = save_pars(all = TRUE))
+# final significant interactions
+m3 <-brm(data=sys.data.only, formula=total_inmate_deaths~ inmate_tests*(total_officer_deaths) +
+           latest_inmate_population*(state_deaths) + state_cases*(state_deaths), 
+         family=gaussian(), refresh=0, save_pars = save_pars(all = TRUE)) 
+```
+```{r vs. intercept-only}
+bayesfactor_models(m1, m2, m3, denominator = m0)
+```
+```{r vs. main effects only}
+bayesfactor_models(m2, m3, denominator = m1)
+```
+```{r both interaction term models}
+bayesfactor_models(m3, denominator = m2)
+```
+BF Comparisons support interaction model as the best fit
+```{r posterior graphs with brm model}
+mcmc_areas(as.matrix(m3), prob=0.90)
+
+color_scheme_set("red")
+ppc_dens_overlay(y = as.vector(sys.data.only$total_inmate_deaths),
+                 yrep = posterior_predict(m3, draws = 50))
+```
+```{r coefficient in brm model}
+round(posterior_interval(m2, prob = 0.90), 3)
+```
+```{r poisson model}
+sys.us.data <- systems.us %>%
+  select(-c("system"))
+m.pois <- stan_glm(data = sys.us.data, 
+                        formula = total_inmate_deaths~., 
+                         family= poisson(link="log"),
+                         refresh = 0, refresh = 0, seed = 40)
+mcmc_areas(as.matrix(m.pois), prob=0.90)
+color_scheme_set("red")
+ppc_dens_overlay(y = as.vector(m.pois$y),
+                 yrep = posterior_predict(m.pois, draws = 50))
+round(posterior_interval(m.pois, prob = 0.90), 3)
+```
+
+
 
 

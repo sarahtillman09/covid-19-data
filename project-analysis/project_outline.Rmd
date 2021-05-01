@@ -1,0 +1,374 @@
+---
+title: "Modeling COVID-19 Deaths in US Prisons"
+author: "Sarah Tillman"
+date: "4/30/2021"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+# Libraries & Dataset Imports
+```{r load libraries}
+library(plyr)
+library(magrittr)
+library(readr)
+library(tidyverse)
+library(gridExtra)
+library(rstan)
+library(bayesplot)
+library(loo)
+library(rstanarm)
+library(bayestestR)
+library(brms)
+```
+```{r load datasets, message=FALSE}
+cases_recent <- read_csv(file="../us-states.csv")
+systems.full <- read.csv(file="../prisons/systems.csv")
+```
+# Combine Datasets & Drop Irrelevant Data
+```{r filter data & join tables}
+# filter for cummulative counts on 3/31/2021
+state.cases <- cases_recent %>%
+  filter(date == "2021-03-31") %>%
+  select(-c("date", "fips"))
+
+# drop unimportant columns & add overall state data
+systems <- systems.full %>%
+  inner_join(state.cases,by=c("system" = "state")) %>%
+  select(-c(max_inmate_population_2020))
+# rename state data columns
+colnames(systems)[8] <- "state_cases"
+colnames(systems)[9] <- "state_deaths"
+# drop NA's
+systems <- drop_na(systems)
+```
+# Density Distribution of total_inmate_deaths
+```{r density plot of inmate death counts}
+systems %>%
+  ggplot(aes(x=total_inmate_deaths)) + geom_density()
+```
+```{r check summary statistics of response var}
+systems %>%
+  summarise(mean = mean(total_inmate_deaths),
+            sd = sd(total_inmate_deaths),
+            variance = var(total_inmate_deaths),
+            IQR = IQR(total_inmate_deaths),
+            outlier_limit = mean(total_inmate_deaths) + 1.5*IQR(total_inmate_deaths))
+nonoutliers.systems <- systems %>%
+  filter(total_inmate_deaths <= 110.4)
+```
+total_inmate_deaths is a count variable with a much greater variance in comparison to the mean.
+# Identifying Outliers in total_inmate_deaths 
+```{r create scaled dataset}
+# save scaled data as sep. dataset
+systems.scaled.outliers <- systems
+systems.scaled.outliers$latest_inmate_population <- scale(systems$latest_inmate_population)
+systems.scaled.outliers$total_inmate_cases <- scale(systems$total_inmate_cases)
+systems.scaled.outliers$total_officer_cases <- scale(systems$total_officer_cases)
+systems.scaled.outliers$total_officer_deaths <- scale(systems$total_officer_deaths)
+systems.scaled.outliers$inmate_tests <- scale(systems$inmate_tests)
+systems.scaled.outliers$state_cases <- scale(systems$state_cases)
+systems.scaled.outliers$state_deaths <- scale(systems$state_deaths)
+nrv.scaled <- systems.scaled.outliers
+systems.scaled.outliers$total_inmate_deaths <- scale(systems$total_inmate_deaths)
+```
+```{r covariates only datasets} 
+# save data only models for ease of formula 
+sys.data <- select(systems, -c("system")) 
+nonoutliers.sys.data <- select(nonoutliers.systems, -c("system")) 
+sys.scaled.data <- select(systems.scaled.outliers, -c("system"))
+nrv.scaled.data <- select(nrv.scaled, -c("system"))
+```
+# Fit Negative Bionmial & Poisson Regression Model with Poisson GLM under full dataset
+```{r STAN_GLM + Bayes Factor for outlier}
+nb.1 <- stan_glm(data = sys.data, formula = total_inmate_deaths~.,
+                        family=neg_binomial_2(link="log"),
+                        refresh = 0, refresh = 0)
+(loo.nb1 <- loo(nb.1, save_psis = T))
+pois.1 <- stan_glm(data = sys.data, formula = total_inmate_deaths~.,
+                        family=poisson(link="log"),
+                        refresh = 0, refresh = 0)
+(loo.pois1 <- loo(pois.1, save_psis = T))
+loo_compare(loo.pois1, loo.nb1)
+```
+```{r STAN_GLM + Bayes Factor for dataset with only covariates scaled}
+norm.0 <- stan_glm(data = nrv.scaled.data, formula = total_inmate_deaths~.,
+                        family=gaussian(),
+                        refresh = 0, refresh = 0)
+(loo.norm.0 <- loo(norm.0, save_psis = T))
+loo.nb1
+loo_compare(loo.norm.0, loo.nb1)
+```
+# Fit Regression Model with Gaussian Model under Scaled Dataset
+```{r STAN_GLM + Bayes Factor for Scaled Normal Model}
+norm.1 <- stan_glm(data = sys.scaled.data, formula = total_inmate_deaths~.,
+                        family=gaussian(),
+                        refresh = 0, refresh = 0)
+(loo.norm1 <- loo(norm.1, save_psis = T))
+loo.nb1
+loo_compare(loo.norm1, loo.nb1)
+```
+# Comparing Model Fits
+```{r}
+(BF.pois <- bayesfactor_parameters(pois.1, null = 0))
+(BF.nb <- bayesfactor_parameters(nb.1, null = 0))
+(BF.norm <- bayesfactor_parameters(norm.1, null = 0))
+```
+According to the looic comparisons above, the Normal model with scaled outliers has the best fit since it has a significantly lower looic compared to both the Negative Binomial and Poisson GLMs. 
+
+# Fit Best Model Type With All Possible Interactions
+```{r interactions w/ inmate tests}
+int.1 <- stan_glm(data = nrv.scaled.data, 
+                        formula = total_inmate_deaths~ inmate_tests*., 
+                         family= gaussian(),
+                         refresh = 0, refresh = 0, seed = 4)
+round(posterior_interval(int.1, prob = 0.90), 3)
+```
+```{r interactions w/ total inmate cases}
+int.2 <- stan_glm(data = nrv.scaled.data, 
+                        formula = total_inmate_deaths~ total_inmate_cases*., 
+                         family= gaussian(),
+                         refresh = 0, refresh = 0, seed = 5)
+round(posterior_interval(int.2, prob = 0.90), 3)
+```
+```{r interactions w/ inmate population}
+int.3 <- stan_glm(data = nrv.scaled.data, 
+                        formula = total_inmate_deaths~ latest_inmate_population*., 
+                         family= gaussian(),
+                         refresh = 0, refresh = 0, seed = 5)
+round(posterior_interval(int.3, prob = 0.90), 3)
+```
+```{r interactions w/ officer cases}
+int.4 <- stan_glm(data = nrv.scaled.data, 
+                        formula = total_inmate_deaths~ total_officer_cases*., 
+                         family= gaussian(),
+                         refresh = 0, refresh = 0, seed = 5)
+round(posterior_interval(int.4, prob = 0.90), 3)
+```
+```{r interactions w/ officer deaths}
+int.5 <- stan_glm(data = nrv.scaled.data, 
+                        formula = total_inmate_deaths~ total_officer_deaths*., 
+                         family= gaussian(),
+                         refresh = 0, refresh = 0, seed = 5)
+round(posterior_interval(int.5, prob = 0.90), 3)
+```
+```{r interactions w/ statewide cases}
+int.6 <- stan_glm(data = nrv.scaled.data, 
+                        formula = total_inmate_deaths~ state_cases*., 
+                         family= gaussian(),
+                         refresh = 0, refresh = 0, seed = 5)
+round(posterior_interval(int.6, prob = 0.90), 3)
+```
+```{r interactions w/ statewide deaths}
+int.7 <- stan_glm(data = nrv.scaled.data, 
+                        formula = total_inmate_deaths~ state_deaths*., 
+                         family= gaussian(),
+                         refresh = 0, refresh = 0, seed = 5)
+round(posterior_interval(int.7, prob = 0.90), 3)
+```
+```{r model w/ all significant interaction terms added}
+full.int <- stan_glm(data = nrv.scaled.data, 
+                        formula = total_inmate_deaths~ 
+                       latest_inmate_population*(inmate_tests + total_officer_deaths + state_cases + 
+                                                   state_deaths + total_officer_cases) +
+                       total_officer_deaths*(total_inmate_cases + total_officer_cases) + 
+                       state_cases*(state_deaths), 
+                         family= gaussian(),
+                         refresh = 0, refresh = 0, seed = 5)
+round(posterior_interval(full.int, prob = 0.90), 3)
+(BF.full.int <- bayesfactor_parameters(full.int, null = 0))
+(loo.full.int <- loo(full.int, save_psis = T))
+```
+```{r optimization 1}
+sig1 <- stan_glm(data = sys.scaled.data, 
+                        formula = 
+                    total_inmate_deaths~ inmate_tests*(latest_inmate_population + total_officer_deaths) +
+                    total_inmate_cases*(total_officer_deaths) +
+                    latest_inmate_population*(total_officer_deaths + state_cases + state_deaths) +
+                    total_officer_cases*(total_officer_deaths) +
+                    state_cases*(total_officer_deaths + state_deaths), 
+                         family= gaussian(),
+                         refresh = 0, refresh = 0, seed = 5)
+(BF.sig1 <- bayesfactor_parameters(sig1, null = 0))
+(loo.sig1 <- loo(sig1, save_psis = T))
+loo.full.int
+```
+```{r optimization 2}
+loo.best <- loo.sig1
+sig2 <- stan_glm(data = sys.scaled.data, 
+                        formula = 
+                    total_inmate_deaths~ inmate_tests*(total_officer_deaths) +
+                    total_inmate_cases*(total_officer_deaths) +
+                    latest_inmate_population*(total_officer_deaths + state_cases + state_deaths) +
+                    total_officer_cases*(total_officer_deaths) +
+                    state_cases*(total_officer_deaths + state_deaths), 
+                         family= gaussian(),
+                         refresh = 0, refresh = 0, seed = 5)
+(BF.sig2 <- bayesfactor_parameters(sig2, null = 0))
+(loo.sig2 <- loo(sig2, save_psis = T))
+loo.best
+```
+```{r optimization 3}
+loo.best <- loo.sig2
+sig3 <- stan_glm(data = sys.scaled.data, 
+                        formula = 
+                    total_inmate_deaths~ inmate_tests*(total_officer_deaths) +
+                    total_inmate_cases*(total_officer_deaths) +
+                    latest_inmate_population*(total_officer_deaths + state_deaths) +
+                    total_officer_cases*(total_officer_deaths) +
+                    state_cases*(total_officer_deaths + state_deaths), 
+                         family= gaussian(),
+                         refresh = 0, refresh = 0, seed = 5)
+(BF.sig3 <- bayesfactor_parameters(sig3, null = 0))
+(loo.sig3 <- loo(sig3, save_psis = T))
+loo.best
+```
+```{r optimization 4}
+loo.best <- loo.sig3
+sig4 <- stan_glm(data = sys.scaled.data, 
+                        formula = 
+                    total_inmate_deaths~ inmate_tests*(total_officer_deaths) +
+                    latest_inmate_population*(total_officer_deaths + state_deaths) +
+                    total_officer_cases*(total_officer_deaths) +
+                    state_cases*(total_officer_deaths + state_deaths), 
+                         family= gaussian(),
+                         refresh = 0, refresh = 0, seed = 5)
+(BF.sig4 <- bayesfactor_parameters(sig4, null = 0))
+(loo.sig4 <- loo(sig4, save_psis = T))
+loo.best
+```
+```{r optimization 5}
+loo.best <- loo.sig4
+sig5 <- stan_glm(data = sys.scaled.data, 
+                        formula = 
+                    total_inmate_deaths~ inmate_tests*(total_officer_deaths) +
+                    latest_inmate_population*(state_deaths) +
+                    total_officer_cases*(total_officer_deaths) +
+                    state_cases*(total_officer_deaths + state_deaths), 
+                         family= gaussian(),
+                         refresh = 0, refresh = 0, seed = 5)
+(BF.sig5 <- bayesfactor_parameters(sig5, null = 0))
+(loo.sig5 <- loo(sig5, save_psis = T))
+loo.best
+```
+```{r optimization 6}
+loo.best <- loo.sig5
+sig6 <- stan_glm(data = sys.scaled.data, 
+                        formula = 
+                    total_inmate_deaths~ inmate_tests*(total_officer_deaths) +
+                    latest_inmate_population*(state_deaths) +
+                    state_cases*(total_officer_deaths + state_deaths), 
+                         family= gaussian(),
+                         refresh = 0, refresh = 0, seed = 5)
+(BF.sig6 <- bayesfactor_parameters(sig6, null = 0))
+(loo.sig6 <- loo(sig6, save_psis = T))
+loo.best
+```
+```{r optimization 7}
+loo.best <- loo.sig6
+sig7 <- stan_glm(data = sys.scaled.data, 
+                        formula = 
+                    total_inmate_deaths~ inmate_tests*(total_officer_deaths) +
+                    latest_inmate_population*(state_deaths) +
+                    state_cases*(state_deaths) + total_officer_deaths, 
+                         family= gaussian(),
+                         refresh = 0, refresh = 0, seed = 5)
+(BF.sig7 <- bayesfactor_parameters(sig7, null = 0))
+(loo.sig7 <- loo(sig7, save_psis = T))
+loo.best
+```
+```{r final model}
+final.model <- sig7
+mcmc_areas(final.model, prob=0.90)
+
+color_scheme_set("red")
+ppc_dens_overlay(y = as.vector(final.model$y),
+                 yrep = posterior_predict(final.model, draws = 50))
+```
+
+```{r}
+int.1 <- stan_glm(data = nrv.scaled.data, 
+                        formula = total_inmate_deaths~ inmate_tests*., 
+                         family= neg_binomial_2(link="log"),
+                         refresh = 0, refresh = 0, seed = 4)
+round(posterior_interval(int.1, prob = 0.90), 3)
+```
+
+```{r interactions w/ total inmate cases}
+int.2 <- stan_glm(data = nrv.scaled.data, 
+                        formula = total_inmate_deaths~ total_inmate_cases*., 
+                         family= neg_binomial_2(link="log"),
+                         refresh = 0, refresh = 0, seed = 5)
+round(posterior_interval(int.2, prob = 0.90), 3)
+```
+```{r interactions w/ inmate population}
+int.3 <- stan_glm(data = nrv.scaled.data, 
+                        formula = total_inmate_deaths~ latest_inmate_population*., 
+                         family= neg_binomial_2(link="log"),
+                         refresh = 0, refresh = 0, seed = 5)
+round(posterior_interval(int.3, prob = 0.90), 3)
+```
+```{r interactions w/ officer cases}
+int.4 <- stan_glm(data = nrv.scaled.data, 
+                        formula = total_inmate_deaths~ total_officer_cases*., 
+                         family= neg_binomial_2(link="log"),
+                         refresh = 0, refresh = 0, seed = 5)
+round(posterior_interval(int.4, prob = 0.90), 3)
+```
+```{r interactions w/ officer deaths}
+int.5 <- stan_glm(data = nrv.scaled.data, 
+                        formula = total_inmate_deaths~ total_officer_deaths*., 
+                         family= neg_binomial_2(link="log"),
+                         refresh = 0, refresh = 0, seed = 5)
+round(posterior_interval(int.5, prob = 0.90), 3)
+```
+```{r interactions w/ statewide cases}
+int.6 <- stan_glm(data = nrv.scaled.data, 
+                        formula = total_inmate_deaths~ state_cases*., 
+                         family= neg_binomial_2(link="log"),
+                         refresh = 0, refresh = 0, seed = 5)
+round(posterior_interval(int.6, prob = 0.90), 3)
+```
+```{r interactions w/ statewide deaths}
+int.7 <- stan_glm(data = nrv.scaled.data, 
+                        formula = total_inmate_deaths~ state_deaths*., 
+                         family= neg_binomial_2(link="log"),
+                         refresh = 0, refresh = 0, seed = 5)
+round(posterior_interval(int.7, prob = 0.90), 3)
+```
+```{r only significant predictors}
+sig.0 <- stan_glm(data = nrv.scaled.data, 
+                  formula = total_inmate_deaths~ total_inmate_cases +
+                    total_officer_deaths + total_officer_cases*(state_deaths)
+                  + latest_inmate_population*(state_deaths) + inmate_tests, 
+                         family= neg_binomial_2(link="log"),
+                         refresh = 0, refresh = 0, seed = 5)
+round(posterior_interval(sig.0, prob = 0.90), 3)
+```
+```{r}
+mcmc_areas(sig.0, prob=0.90)
+
+color_scheme_set("red")
+ppc_dens_overlay(y = as.vector(sig.0$y),
+                 yrep = posterior_predict(sig.0, draws = 50))
+```
+```{r}
+(loo.sig0 <- loo(sig.0, save_psis = T))
+loo.nb1
+loo_compare(loo.sig0, loo.nb1)
+```
+```{r}
+(BF.sig0 <- bayesfactor_parameters(sig.0, null = 0))
+```
+
+# Compare Loo of Fitted Normal Model v. Fitted Negative Binomial Model
+```{r}
+loo.sig0
+loo.full.int
+loo_compare(loo.sig0, loo.full.int)
+```
+These 2 models are not significantly different in prediction rate based on comparisons between their looic and the difference in expected log posterior density.
+
+
+# Comparing Dataset after Removing Outliers
