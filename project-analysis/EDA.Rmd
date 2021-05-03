@@ -122,18 +122,18 @@ grid.arrange(p1, p2, ncol=2)
 ```
 
 ```{r summarize reponse vars}
-p1 <-facilities %>%
-  ggplot(aes(x=total_inmate_cases, y=total_inmate_deaths)) + geom_point() + 
-  labs(x="Inmate Cases", y= "Inmate Deaths", title="Inmate Deaths v. Cases")
-p2 <-facilities %>%
+p1 <-sys.data %>%
+  ggplot(aes(x=total_inmate_cases, y=latest_inmate_population)) + geom_point() + 
+  labs(x="Inmate Cases", y= "Inmate Population", title="Inmate Cases v. Inmate Population")
+p2 <-sys.data %>%
   ggplot(aes(x=total_officer_cases, y=total_officer_deaths)) + geom_point() + 
-  labs(x="Officer Cases", y= "Officer Deaths", title="Officer Deaths v. Cases")
-p3 <-facilities %>%
+  labs(x="Officer Cases", y= "Officer Deaths", title="Officer Cases v. Officer Deaths")
+p3 <-sys.data %>%
   ggplot(aes(x=total_inmate_cases, y=total_officer_cases)) + geom_point() + 
-  labs(x="Inmate Cases", y= "Officer Cases", title="Inmate v. Officer Cases")
-p4 <-facilities %>%
-  ggplot(aes(x=total_inmate_deaths, y=total_officer_deaths)) + geom_point() + 
-  labs(x="Inmate Deaths", y= "Officer Deaths", title="Inmate v. Officer Deaths")
+  labs(x="Inmate Cases", y= "Officer Cases", title="Inmate Cases v. Officer Cases")
+p4 <-sys.data %>%
+  ggplot(aes(x=state_cases, y=state_deaths)) + geom_point() + 
+  labs(x="State Cases", y= "State Deaths", title="State Cases v. State Deaths")
 
 grid.arrange(p1, p2, p3, p4, ncol=2)
 ```
